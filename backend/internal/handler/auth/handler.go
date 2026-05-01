@@ -492,19 +492,34 @@ func requestPublicBaseURL(r *http.Request, secureCookie bool) string {
 		return ""
 	}
 
-	forwardedProto := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0])
-	switch {
-	case forwardedProto != "":
-		return fmt.Sprintf("%s://%s", forwardedProto, host)
-	case r.TLS != nil:
-		return fmt.Sprintf("https://%s", host)
-	case secureCookie:
-		return fmt.Sprintf("https://%s", host)
-	case strings.Contains(strings.ToLower(host), "localhost"):
-		return fmt.Sprintf("http://%s", host)
-	case strings.Contains(host, ".local"):
-		return fmt.Sprintf("http://%s", host)
-	default:
-		return fmt.Sprintf("https://%s", host)
+	// Never trust request Host in production for password reset links.
+	// Public URL resolution in service/auth falls back to tenant primary
+	// domain and configured APP_URL.
+	if secureCookie {
+		return ""
 	}
+
+	hostname := host
+	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
+		hostname = parsedHost
+	}
+	hostname = strings.Trim(hostname, "[]")
+	lowerHostname := strings.ToLower(hostname)
+	isLocalhost := lowerHostname == "localhost" || strings.HasSuffix(lowerHostname, ".localhost") || strings.HasSuffix(lowerHostname, ".local")
+	if ip := net.ParseIP(hostname); ip != nil && ip.IsLoopback() {
+		isLocalhost = true
+	}
+	if !isLocalhost {
+		return ""
+	}
+
+	scheme := "http"
+	forwardedProto := strings.ToLower(strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]))
+	if forwardedProto == "http" || forwardedProto == "https" {
+		scheme = forwardedProto
+	} else if r.TLS != nil {
+		scheme = "https"
+	}
+
+	return fmt.Sprintf("%s://%s", scheme, host)
 }
