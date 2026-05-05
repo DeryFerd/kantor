@@ -167,9 +167,40 @@ func (s *DomainMonitorService) SyncWhoisAll(ctx context.Context, now time.Time) 
 	return nil
 }
 
+// whoisLookupTimeout is the maximum time a single WHOIS lookup may take
+// before it is cancelled. The likexian/whois library does not accept a
+// context, so we enforce the deadline via a goroutine + channel.
+const whoisLookupTimeout = 30 * time.Second
+
+type whoisResult struct {
+	raw string
+	err error
+}
+
 func (s *DomainMonitorService) syncWhois(ctx context.Context, d model.Domain) {
 	now := time.Now().UTC()
-	raw, err := whois.Whois(d.Name)
+
+	resultCh := make(chan whoisResult, 1)
+	go func() {
+		raw, err := whois.Whois(d.Name)
+		resultCh <- whoisResult{raw: raw, err: err}
+	}()
+
+	var raw string
+	var err error
+	select {
+	case r := <-resultCh:
+		raw, err = r.raw, r.err
+	case <-time.After(whoisLookupTimeout):
+		_ = s.repo.SetWhoisSyncResult(ctx, d.ID, now, nil, "whois lookup timed out after 30s")
+		_ = s.repo.CreateEvent(ctx, d.ID, "whois", "error", "whois lookup timed out after 30s")
+		return
+	case <-ctx.Done():
+		_ = s.repo.SetWhoisSyncResult(ctx, d.ID, now, nil, "whois lookup cancelled: "+ctx.Err().Error())
+		_ = s.repo.CreateEvent(ctx, d.ID, "whois", "error", "whois lookup cancelled: "+ctx.Err().Error())
+		return
+	}
+
 	if err != nil {
 		_ = s.repo.SetWhoisSyncResult(ctx, d.ID, now, nil, err.Error())
 		_ = s.repo.CreateEvent(ctx, d.ID, "whois", "error", "whois lookup failed: "+err.Error())
