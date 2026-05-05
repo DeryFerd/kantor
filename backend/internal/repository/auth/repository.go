@@ -315,7 +315,7 @@ func (r *Repository) GetRefreshTokenByHash(ctx context.Context, tokenHash string
 	return refreshToken, nil
 }
 
-func (r *Repository) RotateRefreshToken(ctx context.Context, oldTokenHash string, params CreateRefreshTokenParams) error {
+func (r *Repository) RotateRefreshToken(ctx context.Context, oldTokenHash string, params CreateRefreshTokenParams) (err error) {
 	ctx, cancel := repository.QueryContext(ctx)
 	defer cancel()
 	tx, err := repository.DB(ctx, r.db).Begin(ctx)
@@ -334,8 +334,13 @@ func (r *Repository) RotateRefreshToken(ctx context.Context, oldTokenHash string
 		WHERE token_hash = $1 AND revoked_at IS NULL
 	`
 
-	if _, err = tx.Exec(ctx, updateQuery, oldTokenHash); err != nil {
+	updateTag, err := tx.Exec(ctx, updateQuery, oldTokenHash)
+	if err != nil {
 		return err
+	}
+	if updateTag.RowsAffected() == 0 {
+		err = ErrNotFound
+		return
 	}
 
 	insertQuery := `
@@ -347,7 +352,8 @@ func (r *Repository) RotateRefreshToken(ctx context.Context, oldTokenHash string
 		return err
 	}
 
-	return tx.Commit(ctx)
+	err = tx.Commit(ctx)
+	return err
 }
 
 func (r *Repository) RevokeAllUserTokens(ctx context.Context, userID string) error {
@@ -825,15 +831,43 @@ func (r *Repository) listUserRoleKeys(ctx context.Context, userIDs []string) (ma
 	return roleMap, nil
 }
 
-func (r *Repository) SetUserActive(ctx context.Context, userID string, active bool) error {
-	tag, err := repository.DB(ctx, r.db).Exec(ctx, `UPDATE users SET is_active = $2, updated_at = NOW() WHERE id = $1::uuid`, userID, active)
+func (r *Repository) SetUserActive(ctx context.Context, userID string, active bool) (err error) {
+	ctx, cancel := repository.QueryContext(ctx)
+	defer cancel()
+
+	tx, err := repository.DB(ctx, r.db).Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	tag, err := tx.Exec(ctx, `UPDATE users SET is_active = $2, updated_at = NOW() WHERE id = $1::uuid`, userID, active)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
-		return ErrNotFound
+		err = ErrNotFound
+		return
 	}
-	return nil
+
+	// When an account is deactivated, revoke all outstanding refresh tokens so
+	// the user cannot continue rotating sessions from previously issued cookies.
+	if !active {
+		if _, err = tx.Exec(
+			ctx,
+			`UPDATE refresh_tokens SET revoked_at = NOW(), last_used_at = NOW() WHERE user_id = $1::uuid AND revoked_at IS NULL`,
+			userID,
+		); err != nil {
+			return err
+		}
+	}
+
+	err = tx.Commit(ctx)
+	return err
 }
 
 func (r *Repository) ReplaceUserRoles(ctx context.Context, userID string, roles []rbac.RoleKey) error {
