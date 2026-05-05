@@ -43,6 +43,7 @@ type EmailDeliveryService struct {
 	fallbackAppURL      string
 	mu                  sync.Mutex
 	lastWeeklyDigestRun map[string]time.Time
+	lastPruneAt         time.Time
 }
 
 type emailRuntimeConfig struct {
@@ -303,6 +304,11 @@ func (s *EmailDeliveryService) resolveTenantBaseURL(ctx context.Context) (string
 	return tenant.ResolveBaseURL(ctx, s.settingsRepo, s.fallbackAppURL)
 }
 
+// weeklyDigestPruneAge is how old a lastWeeklyDigestRun entry must be before
+// it is pruned. Entries older than this are from a previous cron window and
+// will never match again, so keeping them wastes memory.
+const weeklyDigestPruneAge = 2 * time.Hour
+
 func (s *EmailDeliveryService) shouldRunWeeklyDigest(ctx context.Context, now time.Time) bool {
 	info, ok := tenant.FromContext(ctx)
 	if !ok || strings.TrimSpace(info.ID) == "" {
@@ -312,6 +318,16 @@ func (s *EmailDeliveryService) shouldRunWeeklyDigest(ctx context.Context, now ti
 	runKey := now.In(time.Local).Truncate(time.Minute)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Prune stale entries at most once per prune interval.
+	if now.Sub(s.lastPruneAt) >= weeklyDigestPruneAge {
+		for id, t := range s.lastWeeklyDigestRun {
+			if now.Sub(t) > weeklyDigestPruneAge {
+				delete(s.lastWeeklyDigestRun, id)
+			}
+		}
+		s.lastPruneAt = now
+	}
 
 	if lastRunAt, exists := s.lastWeeklyDigestRun[info.ID]; exists && lastRunAt.Equal(runKey) {
 		return false
