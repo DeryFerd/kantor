@@ -125,7 +125,7 @@ func (s *VPSMonitorService) processCheck(ctx context.Context, check model.VPSHea
 	switch {
 	case updated.LastStatus == "down" && updated.ConsecutiveFails >= downBeforeAlert:
 		if !updated.AlertActive || cooldownExpired(updated.AlertLastSentAt, now) {
-			s.dispatchDownAlert(ctx, check, updated, statusChanged)
+			s.dispatchDownAlert(ctx, check, updated, !updated.AlertActive)
 			if err := s.repo.MarkCheckAlertActive(ctx, check.ID, now); err != nil {
 				slog.WarnContext(ctx, "mark vps alert active failed", "check_id", check.ID, "error", err)
 			}
