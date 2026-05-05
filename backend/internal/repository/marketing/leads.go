@@ -100,6 +100,76 @@ func (r *LeadsRepository) CreateLead(ctx context.Context, params UpsertLeadParam
 	return r.GetLeadByID(ctx, leadID)
 }
 
+// BatchLeadError records a per-row failure during a batch insert.
+type BatchLeadError struct {
+	Index int
+	Err   error
+}
+
+// CreateManyLeads inserts multiple leads in a single pgx.Batch round-trip.
+// FK references (assigned_to, campaign_id) are validated in bulk before the
+// batch is sent. Per-row insert errors are returned in []BatchLeadError
+// rather than aborting the entire batch. Returns the count of successfully
+// inserted rows.
+func (r *LeadsRepository) CreateManyLeads(ctx context.Context, params []UpsertLeadParams) (int, []BatchLeadError, error) {
+	ctx, cancel := repository.QueryContext(ctx)
+	defer cancel()
+
+	if len(params) == 0 {
+		return 0, nil, nil
+	}
+
+	// Pre-validate FK references in bulk.
+	uniqueEmployees := dedupeNullableStrings(mapNullableStrings(params, func(p UpsertLeadParams) *string { return p.AssignedTo }))
+	uniqueCampaigns := dedupeNullableStrings(mapNullableStrings(params, func(p UpsertLeadParams) *string { return p.CampaignID }))
+
+	if err := r.ensureEmployeesExist(ctx, uniqueEmployees); err != nil {
+		return 0, nil, err
+	}
+	if err := r.ensureCampaignsExist(ctx, uniqueCampaigns); err != nil {
+		return 0, nil, err
+	}
+
+	query := `
+		INSERT INTO leads (
+			name, phone, email, source_channel, pipeline_status, campaign_id, assigned_to, notes, company_name, estimated_value, created_by
+		)
+		VALUES ($1, NULLIF($2, ''), NULLIF($3, ''), $4, $5, NULLIF($6, '')::uuid, NULLIF($7, '')::uuid, NULLIF($8, ''), NULLIF($9, ''), $10, $11::uuid)
+	`
+
+	batch := &pgx.Batch{}
+	for _, p := range params {
+		batch.Queue(query,
+			p.Name,
+			nullableLeadText(p.Phone),
+			nullableLeadText(p.Email),
+			p.SourceChannel,
+			p.PipelineStatus,
+			nullableLeadText(p.CampaignID),
+			nullableLeadText(p.AssignedTo),
+			nullableLeadText(p.Notes),
+			nullableLeadText(p.CompanyName),
+			p.EstimatedValue,
+			p.CreatedBy,
+		)
+	}
+
+	results := repository.DB(ctx, r.db).SendBatch(ctx, batch)
+	defer results.Close()
+
+	var batchErrs []BatchLeadError
+	inserted := 0
+	for i := range params {
+		if _, err := results.Exec(); err != nil {
+			batchErrs = append(batchErrs, BatchLeadError{Index: i, Err: err})
+		} else {
+			inserted++
+		}
+	}
+
+	return inserted, batchErrs, nil
+}
+
 func (r *LeadsRepository) ListLeads(ctx context.Context, params ListLeadsParams) ([]model.Lead, int64, error) {
 	ctx, cancel := repository.QueryContext(ctx)
 	defer cancel()
@@ -667,6 +737,69 @@ func nullableLeadText(value *string) interface{} {
 		return nil
 	}
 	return trimmed
+}
+
+// ensureEmployeesExist checks that all given employee IDs exist in the DB.
+// Empty or nil IDs are ignored. Returns ErrLeadAssignedUserMissing for the
+// first missing employee.
+func (r *LeadsRepository) ensureEmployeesExist(ctx context.Context, ids []string) error {
+	for _, id := range ids {
+		var exists bool
+		if err := repository.DB(ctx, r.db).QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM employees WHERE id = $1::uuid)`, id).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return ErrLeadAssignedUserMissing
+		}
+	}
+	return nil
+}
+
+// ensureCampaignsExist checks that all given campaign IDs exist in the DB.
+// Empty or nil IDs are ignored. Returns ErrLeadCampaignMissing for the
+// first missing campaign.
+func (r *LeadsRepository) ensureCampaignsExist(ctx context.Context, ids []string) error {
+	for _, id := range ids {
+		var exists bool
+		if err := repository.DB(ctx, r.db).QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM campaigns WHERE id = $1::uuid)`, id).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return ErrLeadCampaignMissing
+		}
+	}
+	return nil
+}
+
+// mapNullableStrings extracts a nullable string field from each param.
+func mapNullableStrings(params []UpsertLeadParams, extract func(UpsertLeadParams) *string) []*string {
+	out := make([]*string, len(params))
+	for i, p := range params {
+		out[i] = extract(p)
+	}
+	return out
+}
+
+// dedupeNullableStrings returns unique non-empty trimmed string values from
+// a slice of nullable strings.
+func dedupeNullableStrings(items []*string) []string {
+	seen := make(map[string]struct{})
+	out := make([]string, 0)
+	for _, s := range items {
+		if s == nil {
+			continue
+		}
+		trimmed := strings.TrimSpace(*s)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
 }
 
 type leadStatusOption struct {

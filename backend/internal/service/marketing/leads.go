@@ -47,6 +47,7 @@ const maxLeadImportRows = 10000
 
 type leadsRepository interface {
 	CreateLead(ctx context.Context, params marketingrepo.UpsertLeadParams) (model.Lead, error)
+	CreateManyLeads(ctx context.Context, params []marketingrepo.UpsertLeadParams) (int, []marketingrepo.BatchLeadError, error)
 	ListLeads(ctx context.Context, params marketingrepo.ListLeadsParams) ([]model.Lead, int64, error)
 	GetLeadByID(ctx context.Context, leadID string) (model.Lead, error)
 	UpdateLead(ctx context.Context, leadID string, params marketingrepo.UpsertLeadParams) (model.Lead, error)
@@ -203,6 +204,13 @@ func (s *LeadsService) ImportCSV(ctx context.Context, reader io.Reader, actorID 
 		Errors: make([]model.LeadImportError, 0),
 	}
 
+	// Phase 1: Parse all rows, collect valid params and per-row line numbers.
+	type indexedParam struct {
+		lineNumber int
+		params     marketingrepo.UpsertLeadParams
+	}
+	var validRows []indexedParam
+
 	importedRows := 0
 	lineNumber := 1
 	for {
@@ -234,16 +242,56 @@ func (s *LeadsService) ImportCSV(ctx context.Context, reader io.Reader, actorID 
 			continue
 		}
 
-		if _, createErr := s.CreateLead(ctx, request, actorID); createErr != nil {
+		validRows = append(validRows, indexedParam{
+			lineNumber: lineNumber,
+			params: marketingrepo.UpsertLeadParams{
+				Name:           request.Name,
+				Phone:          request.Phone,
+				Email:          request.Email,
+				SourceChannel:  request.SourceChannel,
+				PipelineStatus: request.PipelineStatus,
+				CampaignID:     request.CampaignID,
+				AssignedTo:     request.AssignedTo,
+				Notes:          request.Notes,
+				CompanyName:    request.CompanyName,
+				EstimatedValue: request.EstimatedValue,
+				CreatedBy:      actorID,
+			},
+		})
+	}
+
+	if len(validRows) == 0 {
+		return summary, nil
+	}
+
+	// Phase 2: Batch insert all valid rows in one round-trip.
+	batchParams := make([]marketingrepo.UpsertLeadParams, len(validRows))
+	for i, r := range validRows {
+		batchParams[i] = r.params
+	}
+
+	inserted, batchErrs, err := s.repo.CreateManyLeads(ctx, batchParams)
+	if err != nil {
+		// Catastrophic FK validation failure — fall back to per-row error reporting.
+		for _, r := range validRows {
 			summary.FailedCount++
 			summary.Errors = append(summary.Errors, model.LeadImportError{
-				Row:     lineNumber,
-				Message: createErr.Error(),
+				Row:     r.lineNumber,
+				Message: err.Error(),
 			})
-			continue
 		}
+		return summary, nil
+	}
 
-		summary.SuccessCount++
+	summary.SuccessCount = inserted
+
+	// Map batch errors back to CSV line numbers.
+	for _, be := range batchErrs {
+		summary.FailedCount++
+		summary.Errors = append(summary.Errors, model.LeadImportError{
+			Row:     validRows[be.Index].lineNumber,
+			Message: be.Err.Error(),
+		})
 	}
 
 	return summary, nil
