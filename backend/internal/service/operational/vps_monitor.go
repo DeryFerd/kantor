@@ -108,7 +108,7 @@ func (s *VPSMonitorService) processCheck(ctx context.Context, check model.VPSHea
 	probeResult.CheckID = check.ID
 	probeResult.Timestamp = now
 
-	updated, statusChanged, err := s.repo.RecordCheckResult(ctx, check.VPSID, probeResult)
+	updated, _, err := s.repo.RecordCheckResult(ctx, check.VPSID, probeResult)
 	if err != nil {
 		slog.ErrorContext(ctx, "record vps check result failed", "check_id", check.ID, "error", err)
 		return
