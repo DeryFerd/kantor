@@ -11,9 +11,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/kana-consultant/kantor/backend/internal/model"
+	platformmiddleware "github.com/kana-consultant/kantor/backend/internal/middleware"
+	repository "github.com/kana-consultant/kantor/backend/internal/repository"
 	notificationsrepo "github.com/kana-consultant/kantor/backend/internal/repository/notifications"
 	operationalrepo "github.com/kana-consultant/kantor/backend/internal/repository/operational"
+	"github.com/kana-consultant/kantor/backend/internal/tenant"
 )
 
 // downBeforeAlert is how many consecutive failures must accumulate before
@@ -43,14 +48,16 @@ type VPSMonitorService struct {
 	repo       vpsRepository
 	notifs     vpsMonitorNotifications
 	authRepo   vpsMonitorAuthLookup
+	pool       *pgxpool.Pool
 	httpClient *http.Client
 }
 
-func NewVPSMonitorService(repo vpsRepository, notifs vpsMonitorNotifications, authRepo vpsMonitorAuthLookup) *VPSMonitorService {
+func NewVPSMonitorService(repo vpsRepository, notifs vpsMonitorNotifications, authRepo vpsMonitorAuthLookup, pool *pgxpool.Pool) *VPSMonitorService {
 	return &VPSMonitorService{
 		repo:     repo,
 		notifs:   notifs,
 		authRepo: authRepo,
+		pool:     pool,
 		// Single shared client; per-call timeout is set on the request itself.
 		// DisableKeepAlives keeps probe latency honest by not measuring a
 		// reused connection.
@@ -84,6 +91,12 @@ func (s *VPSMonitorService) RunDueChecks(ctx context.Context, now time.Time) err
 	}
 	close(jobs)
 
+	// Each worker acquires its own tenant-scoped DB connection. Sharing a
+	// single pgxpool.Conn across goroutines is not safe — pgx serializes at
+	// the connection level which both kills the parallelism the worker pool
+	// is meant to provide and risks panics on concurrent operations.
+	tenantInfo, hasTenant := tenant.FromContext(ctx)
+
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
@@ -95,12 +108,31 @@ func (s *VPSMonitorService) RunDueChecks(ctx context.Context, now time.Time) err
 				}
 			}()
 			for c := range jobs {
-				s.processCheck(ctx, c, time.Now().UTC())
+				s.runWorker(ctx, tenantInfo.ID, hasTenant, c)
 			}
 		}()
 	}
 	wg.Wait()
 	return nil
+}
+
+// runWorker wraps processCheck with its own tenant-scoped pool connection so
+// concurrent workers do not share a single pgx conn.
+func (s *VPSMonitorService) runWorker(ctx context.Context, tenantID string, hasTenant bool, check model.VPSHealthCheck) {
+	if !hasTenant || s.pool == nil {
+		// Fallback to scheduler-provided conn (legacy path / tests). DB writes
+		// will serialize but it's the safer behavior than failing silently.
+		s.processCheck(ctx, check, time.Now().UTC())
+		return
+	}
+	conn, err := platformmiddleware.AcquireTenantConn(ctx, s.pool, tenantID)
+	if err != nil {
+		slog.WarnContext(ctx, "vps worker acquire conn failed", "check_id", check.ID, "error", err)
+		return
+	}
+	defer platformmiddleware.ReleaseTenantConn(conn)
+	workerCtx := repository.WithConn(ctx, conn)
+	s.processCheck(workerCtx, check, time.Now().UTC())
 }
 
 func (s *VPSMonitorService) processCheck(ctx context.Context, check model.VPSHealthCheck, now time.Time) {

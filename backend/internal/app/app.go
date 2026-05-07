@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	_ "go.uber.org/automaxprocs"
 
 	"github.com/go-chi/chi/v5"
 
@@ -69,7 +70,36 @@ type App struct {
 }
 
 func New(ctx context.Context, cfg config.Config) (*App, error) {
-	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	// Pool tuning rationale:
+	//   MaxConns=25 — TenantMiddleware holds 1 conn per HTTP request for the
+	//   full handler lifetime, plus background schedulers acquire conns per
+	//   tenant. Default of 4 (pgxpool's hardcoded default — NumCPU is NOT
+	//   consulted) drains immediately under any real traffic.
+	//   MaxConnLifetime=30m — recycle to prevent leaks from long-lived conns.
+	//   MaxConnIdleTime=5m  — release idle conns so we don't hold all 25 forever.
+	//   HealthCheckPeriod=1m — proactive ping catches network partitions.
+	// Override in production via DATABASE_URL ?pool_max_conns=N for tuning.
+	poolConfig, err := pgxpool.ParseConfig(cfg.DatabaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse pool config: %w", err)
+	}
+	if poolConfig.MaxConns < 25 {
+		poolConfig.MaxConns = 25
+	}
+	if poolConfig.MinConns < 2 {
+		poolConfig.MinConns = 2
+	}
+	if poolConfig.MaxConnLifetime == 0 {
+		poolConfig.MaxConnLifetime = 30 * time.Minute
+	}
+	if poolConfig.MaxConnIdleTime == 0 {
+		poolConfig.MaxConnIdleTime = 5 * time.Minute
+	}
+	if poolConfig.HealthCheckPeriod == 0 {
+		poolConfig.HealthCheckPeriod = 1 * time.Minute
+	}
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		return nil, fmt.Errorf("create pgx pool: %w", err)
 	}
@@ -186,9 +216,9 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 
 	trackerReminderService := operationalservice.NewTrackerReminderService(trackerReminderRepository, notificationsRepository, whatsappService)
 	vpsService := operationalservice.NewVPSService(vpsRepository)
-	vpsMonitorService := operationalservice.NewVPSMonitorService(vpsRepository, notificationsRepository, authRepository)
+	vpsMonitorService := operationalservice.NewVPSMonitorService(vpsRepository, notificationsRepository, authRepository, pool)
 	domainService := operationalservice.NewDomainService(domainRepository)
-	domainMonitorService := operationalservice.NewDomainMonitorService(domainRepository, notificationsRepository, authRepository)
+	domainMonitorService := operationalservice.NewDomainMonitorService(domainRepository, notificationsRepository, authRepository, pool)
 
 	// Wire event triggers
 	kanbanService.SetTaskAssignNotifier(whatsappService)
@@ -472,6 +502,10 @@ func (a *App) buildRouter(
 func (a *App) startBackgroundJobs(authService *authservice.Service, subscriptionsService *hrisservice.SubscriptionsService, trackerService *operationalservice.TrackerService, trackerReminderService *operationalservice.TrackerReminderService, reimbursementsService *hrisservice.ReimbursementsService, whatsappService *waservice.Service, emailDeliveryService *notificationsservice.EmailDeliveryService, vpsMonitorService *operationalservice.VPSMonitorService, domainMonitorService *operationalservice.DomainMonitorService) {
 	ctx, cancel := context.WithCancel(context.Background())
 	a.backgroundCancel = cancel
+
+	// Permission cache otherwise leaks slowly via stale entries from users
+	// who never come back (TTL only deletes on access).
+	a.permissionCache.StartSweeper(ctx, 5*time.Minute)
 
 	runPerTenant := func(name string, fn func(ctx context.Context, t tenant.Info) error) {
 		if err := platformmiddleware.ForEachTenant(ctx, a.db, fn); err != nil {

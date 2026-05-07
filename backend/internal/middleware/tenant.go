@@ -116,6 +116,35 @@ func WithScopedTenantConn[T any](ctx context.Context, fn func(context.Context) (
 	return fn(repository.WithConn(ctx, conn))
 }
 
+// AcquireTenantConn acquires a fresh tenant-scoped connection from the pool
+// with `app.current_tenant` set + role downgraded (if needed). Caller MUST
+// release via ReleaseTenantConn when done.
+//
+// Use this when you need a private conn for a unit of work that runs in
+// parallel with other workers (e.g. monitor probe workers) — sharing a
+// single pgxpool.Conn across goroutines is not safe.
+func AcquireTenantConn(ctx context.Context, pool *pgxpool.Pool, tenantID string) (*pgxpool.Conn, error) {
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := setupTenantConn(ctx, conn, tenantID); err != nil {
+		conn.Release()
+		return nil, err
+	}
+	return conn, nil
+}
+
+// ReleaseTenantConn resets session state and returns the conn to the pool.
+// Always pair with AcquireTenantConn via defer.
+func ReleaseTenantConn(conn *pgxpool.Conn) {
+	if conn == nil {
+		return
+	}
+	_, _ = conn.Exec(context.Background(), "RESET ALL")
+	conn.Release()
+}
+
 // TenantMiddleware resolves the tenant from the Host header, acquires a
 // dedicated connection from the pool, and configures RLS by setting the
 // app.current_tenant GUC and (when superuser) downgrading to kantor_app.

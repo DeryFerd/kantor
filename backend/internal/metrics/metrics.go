@@ -139,3 +139,12 @@ func (s *statusRecorder) Write(b []byte) (int, error) {
 	}
 	return s.ResponseWriter.Write(b)
 }
+
+// Flush forwards to the wrapped writer when it supports streaming. Without
+// this, SSE handlers (notifications stream) fail their `http.Flusher` type
+// assert because *statusRecorder masks the Flusher interface.
+func (s *statusRecorder) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}

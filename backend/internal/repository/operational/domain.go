@@ -318,7 +318,7 @@ func (r *DomainRepository) ListDueDNSChecks(ctx context.Context, now time.Time) 
 		WHERE dns_check_enabled = TRUE
 		  AND (
 		    dns_last_check_at IS NULL
-		    OR dns_last_check_at + (dns_check_interval_seconds * INTERVAL '1 second') <= $1
+		    OR dns_last_check_at + (dns_check_interval_seconds * INTERVAL '1 second') <= $1::timestamptz
 		  )
 	`, domainColumns)
 
@@ -347,7 +347,7 @@ func (r *DomainRepository) ListWhoisSyncDue(ctx context.Context, now time.Time) 
 	query := fmt.Sprintf(`
 		SELECT %s FROM domains
 		WHERE whois_sync_enabled = TRUE
-		  AND (whois_last_sync_at IS NULL OR whois_last_sync_at < $1 - INTERVAL '24 hours')
+		  AND (whois_last_sync_at IS NULL OR whois_last_sync_at < ($1::timestamptz - INTERVAL '24 hours'))
 	`, domainColumns)
 
 	rows, err := repository.DB(ctx, r.db).Query(ctx, query, now)

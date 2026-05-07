@@ -9,12 +9,16 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/likexian/whois"
 	whoisparser "github.com/likexian/whois-parser"
 
 	"github.com/kana-consultant/kantor/backend/internal/model"
+	platformmiddleware "github.com/kana-consultant/kantor/backend/internal/middleware"
+	repository "github.com/kana-consultant/kantor/backend/internal/repository"
 	notificationsrepo "github.com/kana-consultant/kantor/backend/internal/repository/notifications"
 	operationalrepo "github.com/kana-consultant/kantor/backend/internal/repository/operational"
+	"github.com/kana-consultant/kantor/backend/internal/tenant"
 )
 
 // downBeforeDomainAlert is how many consecutive DNS failures must accumulate
@@ -31,13 +35,15 @@ type DomainMonitorService struct {
 	repo     domainRepository
 	notifs   vpsMonitorNotifications
 	authRepo vpsMonitorAuthLookup
+	pool     *pgxpool.Pool
 }
 
-func NewDomainMonitorService(repo domainRepository, notifs vpsMonitorNotifications, authRepo vpsMonitorAuthLookup) *DomainMonitorService {
+func NewDomainMonitorService(repo domainRepository, notifs vpsMonitorNotifications, authRepo vpsMonitorAuthLookup, pool *pgxpool.Pool) *DomainMonitorService {
 	return &DomainMonitorService{
 		repo:     repo,
 		notifs:   notifs,
 		authRepo: authRepo,
+		pool:     pool,
 	}
 }
 
@@ -59,6 +65,8 @@ func (s *DomainMonitorService) RunDueDNSChecks(ctx context.Context, now time.Tim
 	}
 	close(jobs)
 
+	tenantInfo, hasTenant := tenant.FromContext(ctx)
+
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
@@ -70,12 +78,29 @@ func (s *DomainMonitorService) RunDueDNSChecks(ctx context.Context, now time.Tim
 				}
 			}()
 			for d := range jobs {
-				s.processDNSCheck(ctx, d, time.Now().UTC())
+				s.runDNSWorker(ctx, tenantInfo.ID, hasTenant, d)
 			}
 		}()
 	}
 	wg.Wait()
 	return nil
+}
+
+// runDNSWorker wraps processDNSCheck with its own tenant-scoped pool conn so
+// concurrent workers do not share a single pgx conn.
+func (s *DomainMonitorService) runDNSWorker(ctx context.Context, tenantID string, hasTenant bool, d model.Domain) {
+	if !hasTenant || s.pool == nil {
+		s.processDNSCheck(ctx, d, time.Now().UTC())
+		return
+	}
+	conn, err := platformmiddleware.AcquireTenantConn(ctx, s.pool, tenantID)
+	if err != nil {
+		slog.WarnContext(ctx, "domain dns worker acquire conn failed", "domain_id", d.ID, "error", err)
+		return
+	}
+	defer platformmiddleware.ReleaseTenantConn(conn)
+	workerCtx := repository.WithConn(ctx, conn)
+	s.processDNSCheck(workerCtx, d, time.Now().UTC())
 }
 
 func (s *DomainMonitorService) processDNSCheck(ctx context.Context, d model.Domain, now time.Time) {
@@ -156,15 +181,60 @@ func domainCooldownExpired(lastSent *time.Time, now time.Time) bool {
 // SyncWhoisAll runs WHOIS lookups for domains due for sync (24h cadence).
 // Updates expiry_date when the registry returns one. Errors are recorded
 // per-domain but do not abort the loop.
+//
+// Uses a small worker pool so 50 domains × 5s WHOIS RTT does not block the
+// scheduler for minutes. Each worker uses its own DB connection so writes do
+// not serialize behind a single shared conn.
 func (s *DomainMonitorService) SyncWhoisAll(ctx context.Context, now time.Time) error {
 	domains, err := s.repo.ListWhoisSyncDue(ctx, now)
 	if err != nil {
 		return fmt.Errorf("list whois sync due: %w", err)
 	}
-	for _, d := range domains {
-		s.syncWhois(ctx, d)
+	if len(domains) == 0 {
+		return nil
 	}
+
+	const workers = 4
+	jobs := make(chan model.Domain, len(domains))
+	for _, d := range domains {
+		jobs <- d
+	}
+	close(jobs)
+
+	tenantInfo, hasTenant := tenant.FromContext(ctx)
+
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					slog.ErrorContext(ctx, "whois sync worker panic", "panic", r)
+				}
+			}()
+			for d := range jobs {
+				s.runWhoisWorker(ctx, tenantInfo.ID, hasTenant, d)
+			}
+		}()
+	}
+	wg.Wait()
 	return nil
+}
+
+func (s *DomainMonitorService) runWhoisWorker(ctx context.Context, tenantID string, hasTenant bool, d model.Domain) {
+	if !hasTenant || s.pool == nil {
+		s.syncWhois(ctx, d)
+		return
+	}
+	conn, err := platformmiddleware.AcquireTenantConn(ctx, s.pool, tenantID)
+	if err != nil {
+		slog.WarnContext(ctx, "whois worker acquire conn failed", "domain_id", d.ID, "error", err)
+		return
+	}
+	defer platformmiddleware.ReleaseTenantConn(conn)
+	workerCtx := repository.WithConn(ctx, conn)
+	s.syncWhois(workerCtx, d)
 }
 
 func (s *DomainMonitorService) syncWhois(ctx context.Context, d model.Domain) {
