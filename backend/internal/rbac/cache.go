@@ -196,3 +196,36 @@ func (c *PermissionCache) InvalidateAll() {
 	c.store = make(map[string]*CachedPermissions)
 	c.mu.Unlock()
 }
+
+// StartSweeper spawns a background goroutine that periodically deletes
+// expired entries. Without this, stale entries from users who never come
+// back keep growing the cache map indefinitely (slow memory leak).
+//
+// Returns immediately. Stops when ctx is cancelled.
+func (c *PermissionCache) StartSweeper(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = 5 * time.Minute
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				c.sweep(time.Now())
+			}
+		}
+	}()
+}
+
+func (c *PermissionCache) sweep(now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for key, entry := range c.store {
+		if entry == nil || now.Sub(entry.CachedAt) > entry.TTL {
+			delete(c.store, key)
+		}
+	}
+}
