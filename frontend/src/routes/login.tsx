@@ -20,6 +20,12 @@ const loginSchema = z.object({
 type LoginFormValues = z.infer<typeof loginSchema>;
 
 export const Route = createFileRoute("/login")({
+  validateSearch: (search: Record<string, unknown>) => ({
+    redirect:
+      typeof search.redirect === "string" && search.redirect.startsWith("/")
+        ? search.redirect
+        : undefined,
+  }),
   beforeLoad: async () => {
     const session = getValidStoredSession();
     if (session?.tokens.access_token) {
@@ -32,6 +38,7 @@ export const Route = createFileRoute("/login")({
 });
 
 function LoginPage() {
+  const search = Route.useSearch();
   const setSession = useAuthStore((state) => state.setSession);
   const authPublicOptionsQuery = useQuery({
     queryKey: ["auth", "public-options"],
@@ -55,7 +62,9 @@ function LoginPage() {
     mutationFn: login,
     onSuccess: (session) => {
       setSession(session);
-      window.location.replace(getDefaultAuthorizedPath(session));
+      window.location.replace(
+        search.redirect ?? getDefaultAuthorizedPath(session),
+      );
     },
   });
 

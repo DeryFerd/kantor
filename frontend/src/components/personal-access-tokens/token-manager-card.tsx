@@ -151,7 +151,28 @@ export function TokenManagerCard() {
 
               <div className="space-y-2">
                 <p className="font-semibold text-text-primary">
-                  Cara pasang (config file)
+                  Cara A — Connectors (remote, paling gampang)
+                </p>
+                <ol className="list-decimal space-y-1 pl-5">
+                  <li>
+                    Claude Desktop → Settings → Connectors → Add custom
+                    connector.
+                  </li>
+                  <li>
+                    Remote MCP server URL ={" "}
+                    <code className="font-mono">{mcp.mcpUrl}</code> → Add.
+                  </li>
+                  <li>
+                    Browser kebuka → login KANTOR → klik{" "}
+                    <strong>Izinkan</strong>. OAuth Client ID/Secret biarkan
+                    kosong.
+                  </li>
+                </ol>
+              </div>
+
+              <div className="space-y-2">
+                <p className="font-semibold text-text-primary">
+                  Cara B — Config file (stdio, pakai PAT)
                 </p>
                 <ol className="list-decimal space-y-1 pl-5">
                   <li>Buat token di kartu ini, lalu salin.</li>
@@ -187,12 +208,11 @@ export function TokenManagerCard() {
                 <p>Restart Claude Desktop → tools KANTOR muncul.</p>
               </div>
 
-              <div className="rounded-md border border-warning/40 bg-warning-light p-3 text-text-primary">
+              <div className="rounded-md border border-border bg-surface-muted/40 p-3 text-text-primary">
                 <p className="font-semibold">OAuth Client ID / Secret?</p>
                 <p className="mt-1 text-text-secondary">
-                  Tidak ada. Auth server ini Personal Access Token, jadi menu
-                  "Connectors" (remote/OAuth) di Claude Desktop belum didukung —
-                  pakai cara config file di atas.
+                  Kosongkan saja — KANTOR pakai Dynamic Client Registration, jadi
+                  Claude mendaftar sendiri otomatis.
                 </p>
               </div>
             </div>
