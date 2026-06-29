@@ -51,7 +51,7 @@ jobs:
         run: npm run build
 
   build:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs:
       - backend-tests
       - frontend-build
@@ -118,6 +118,7 @@ jobs:
             --override-input kantor . \
             --override-input saas-boilerplate path:/tmp/nix-config \
             --override-input segmenter path:/tmp/nix-config \
+            --override-input segmenter-s52ai path:/tmp/nix-config \
             --print-out-paths --no-link)
           echo "path=$SYSTEM" >> "$GITHUB_OUTPUT"
 
