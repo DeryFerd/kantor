@@ -65,3 +65,4 @@ export function getSalarySafety(
     `/hris/salary-safety?year=${year}&month=${month}`,
   );
 }
+

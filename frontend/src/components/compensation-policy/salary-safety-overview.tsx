@@ -4,26 +4,12 @@ import { ShieldCheck } from "lucide-react";
 
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import { EmployeeSafetyCard } from "@/components/compensation-policy/employee-safety-card";
+import { MonthYearPicker } from "@/components/compensation-policy/month-year-picker";
 import {
   compensationPolicyKeys,
   getSalarySafety,
 } from "@/services/compensation-policy";
-import { EmployeeSafetyCard } from "@/components/compensation-policy/employee-safety-card";
-
-const monthLabels = [
-  "Januari",
-  "Februari",
-  "Maret",
-  "April",
-  "Mei",
-  "Juni",
-  "Juli",
-  "Agustus",
-  "September",
-  "Oktober",
-  "November",
-  "Desember",
-];
 
 type SummaryStat = {
   label: string;
@@ -55,10 +41,8 @@ export function SalarySafetyOverview() {
 
   const evaluations = safetyQuery.data ?? [];
 
-  const yearOptions = [now.getFullYear(), now.getFullYear() - 1];
-
   return (
-    <Card className="space-y-6 p-6 xl:col-span-2">
+    <Card className="space-y-6 p-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex items-start gap-3">
           <div className="rounded-md bg-error-light p-3 text-error">
@@ -69,35 +53,17 @@ export function SalarySafetyOverview() {
               Status Keamanan Gaji
             </h2>
             <p className="mt-1 text-sm text-text-secondary">
-              Ringkasan kepatuhan jam kerja karyawan terhadap aturan kompensasi.
+              Ringkasan kepatuhan jam kerja seluruh karyawan terhadap aturan
+              kompensasi.
             </p>
           </div>
         </div>
-
-        <div className="flex gap-2">
-          <select
-            className="h-9 rounded-sm border-[1.5px] border-transparent bg-surface-muted px-2 text-[13px] text-text-primary outline-none focus:border-[#4C9AFF] focus:bg-surface"
-            onChange={(event) => setMonth(Number(event.target.value))}
-            value={month}
-          >
-            {monthLabels.map((label, index) => (
-              <option key={label} value={index + 1}>
-                {label}
-              </option>
-            ))}
-          </select>
-          <select
-            className="h-9 rounded-sm border-[1.5px] border-transparent bg-surface-muted px-2 text-[13px] text-text-primary outline-none focus:border-[#4C9AFF] focus:bg-surface"
-            onChange={(event) => setYear(Number(event.target.value))}
-            value={year}
-          >
-            {yearOptions.map((option) => (
-              <option key={option} value={option}>
-                {option}
-              </option>
-            ))}
-          </select>
-        </div>
+        <MonthYearPicker
+          month={month}
+          onMonthChange={setMonth}
+          onYearChange={setYear}
+          year={year}
+        />
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
