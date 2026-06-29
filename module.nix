@@ -241,6 +241,40 @@ in
           '';
         };
 
+        # OAuth authorization-server endpoints live on the backend; the consent
+        # page is served by the SPA. /.well-known is matched exactly so the ACME
+        # challenge path is left untouched.
+        locations."/oauth/" = {
+          proxyPass = "http://127.0.0.1:${toString cfg.port}";
+          extraConfig = ''
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+          '';
+        };
+
+        locations."= /oauth/consent" = {
+          tryFiles = "$uri /index.html";
+        };
+
+        locations."= /.well-known/oauth-authorization-server" = {
+          proxyPass = "http://127.0.0.1:${toString cfg.port}";
+          extraConfig = ''
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+          '';
+        };
+
+        locations."= /.well-known/oauth-protected-resource" = {
+          proxyPass = "http://127.0.0.1:${toString cfg.port}";
+          extraConfig = ''
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+          '';
+        };
+
         locations."/assets/" = {
           root = "${frontend}";
           extraConfig = ''
