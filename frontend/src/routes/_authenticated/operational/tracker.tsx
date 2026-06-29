@@ -68,6 +68,11 @@ import {
   revokeTrackerConsent,
   updateTrackerDomain,
 } from "@/services/operational-tracker";
+import {
+  createPersonalAccessToken,
+  listPersonalAccessTokens,
+  revokePersonalAccessToken,
+} from "@/services/personal-access-tokens";
 import { toast } from "@/stores/toast-store";
 import type {
   DomainCategory,
@@ -80,6 +85,35 @@ import type {
 } from "@/types/tracker";
 const CATEGORY_COLORS = ["#0065FF", "#4C9AFF", "#6554C0", "#FF5630", "#FF8B00", "#36B37E", "#00B8D9", "#97A0AF"];
 const TRACKER_WEB_SOURCE = "KANTOR_WEB_APP";
+
+const EXTENSION_PAT_NAME = "Activity Tracker Extension";
+
+// The browser extension authenticates with a long-lived Personal Access Token
+// rather than the 15-minute web access JWT. The extension cannot renew a short
+// token: its POST /auth/refresh runs cross-site from a chrome-extension context,
+// so the SameSite=Lax, host-only refresh cookie is never attached and refresh
+// always fails — which dropped the tracker offline every ~15 minutes. A PAT does
+// not expire on that cadence, so the extension never hits the broken refresh
+// path. We rotate (revoke any prior extension PAT) so each browser sync leaves
+// exactly one active extension token.
+async function issueExtensionToken(): Promise<string> {
+  try {
+    const existing = await listPersonalAccessTokens();
+    await Promise.all(
+      existing
+        .filter((token) => token.name === EXTENSION_PAT_NAME)
+        .map((token) => revokePersonalAccessToken(token.id).catch(() => undefined)),
+    );
+  } catch {
+    // Listing/revoking is best-effort cleanup; never block issuing a fresh token.
+  }
+
+  const created = await createPersonalAccessToken({
+    name: EXTENSION_PAT_NAME,
+    expires_in_days: 365,
+  });
+  return created.token;
+}
 const TRACKER_EXTENSION_SOURCE = "KANTOR_TRACKER_EXTENSION";
 const DOMAIN_CATEGORY_OPTIONS = [
   { value: "development", label: "Development" },
@@ -351,6 +385,8 @@ function OperationalTrackerPage() {
       throw new Error("Session web KANTOR tidak ditemukan. Login ulang lalu coba lagi.");
     }
 
+    const extensionToken = await issueExtensionToken();
+
     const requestId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
     return new Promise<unknown>((resolve, reject) => {
@@ -369,7 +405,7 @@ function OperationalTrackerPage() {
           payload: {
             apiBaseUrl: trackerApiBaseUrl,
             dashboardUrl: window.location.href,
-            token: session.tokens.access_token,
+            token: extensionToken,
           },
         },
         window.location.origin,
