@@ -35,6 +35,7 @@ import (
 	notificationshandler "github.com/kana-consultant/kantor/backend/internal/handler/notifications"
 	operationalhandler "github.com/kana-consultant/kantor/backend/internal/handler/operational"
 	wahandler "github.com/kana-consultant/kantor/backend/internal/handler/whatsapp"
+	"github.com/kana-consultant/kantor/backend/internal/mcp"
 	"github.com/kana-consultant/kantor/backend/internal/metrics"
 	platformmiddleware "github.com/kana-consultant/kantor/backend/internal/middleware"
 	"github.com/kana-consultant/kantor/backend/internal/rbac"
@@ -169,6 +170,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	}
 	accessTokenBlacklist := backendauth.NewAccessTokenBlacklist(time.Minute)
 	authService := authservice.New(authRepository, employeesRepository, cfg, permissionCache, encrypter, accessTokenBlacklist)
+	patService := authservice.NewPATService(authRepository)
 
 	projectsRepository := operationalrepo.NewProjectsRepository(pool)
 	kanbanRepository := operationalrepo.NewKanbanRepository(pool)
@@ -179,6 +181,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	domainRepository := operationalrepo.NewDomainRepository(pool)
 	departmentsRepository := hrisrepo.NewDepartmentsRepository(pool)
 	compensationRepository := hrisrepo.NewCompensationRepository(pool)
+	compensationPolicyRepository := hrisrepo.NewCompensationPolicyRepository(pool)
 	financeRepository := hrisrepo.NewFinanceRepository(pool)
 	reimbursementsRepository := hrisrepo.NewReimbursementsRepository(pool)
 	subscriptionsRepository := hrisrepo.NewSubscriptionsRepository(pool)
@@ -198,6 +201,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	departmentsService := hrisservice.NewDepartmentsService(departmentsRepository, employeesRepository)
 	payrollCache := hrisservice.NewPayrollCache(5 * time.Minute)
 	compensationService := hrisservice.NewCompensationService(compensationRepository, employeesRepository, encrypter, payrollCache)
+	compensationPolicyService := hrisservice.NewCompensationPolicyService(compensationPolicyRepository)
 	financeService := hrisservice.NewFinanceService(financeRepository)
 	notificationsService := notificationsservice.New(notificationsRepository)
 	reimbursementsService := hrisservice.NewReimbursementsService(reimbursementsRepository, employeesRepository, authRepository, notificationsService, financeService)
@@ -239,6 +243,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	router, err := application.buildRouter(
 		auditService,
 		authService,
+		patService,
 		adminhandler.NewAuditLogsHandler(auditService),
 		operationalhandler.NewOverviewHandler(operationalOverviewService),
 		operationalhandler.NewProjectsHandler(projectsService, kanbanService, projectsRepository, authRepository),
@@ -251,6 +256,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		hrishandler.NewEmployeesHandler(employeesService, compensationService, cfg.UploadsDir, authRepository),
 		hrishandler.NewDepartmentsHandler(departmentsService),
 		hrishandler.NewCompensationHandler(compensationService),
+		hrishandler.NewCompensationPolicyHandler(compensationPolicyService),
 		hrishandler.NewFinanceHandler(financeService, authRepository),
 		hrishandler.NewReimbursementsHandler(reimbursementsService, cfg.UploadsDir, authRepository),
 		hrishandler.NewSubscriptionsHandler(subscriptionsService, authRepository),
@@ -295,6 +301,7 @@ func (a *App) Close() {
 func (a *App) buildRouter(
 	auditService *auditservice.Service,
 	authService *authservice.Service,
+	patService *authservice.PATService,
 	auditLogsHandler *adminhandler.AuditLogsHandler,
 	operationalOverviewHandler *operationalhandler.OverviewHandler,
 	projectsHandler *operationalhandler.ProjectsHandler,
@@ -307,6 +314,7 @@ func (a *App) buildRouter(
 	employeesHandler *hrishandler.EmployeesHandler,
 	departmentsHandler *hrishandler.DepartmentsHandler,
 	compensationHandler *hrishandler.CompensationHandler,
+	compensationPolicyHandler *hrishandler.CompensationPolicyHandler,
 	financeHandler *hrishandler.FinanceHandler,
 	reimbursementsHandler *hrishandler.ReimbursementsHandler,
 	subscriptionsHandler *hrishandler.SubscriptionsHandler,
@@ -320,6 +328,7 @@ func (a *App) buildRouter(
 ) (http.Handler, error) {
 	router := chi.NewRouter()
 	authHandler := authhandler.New(authService, a.cfg)
+	patHandler := authhandler.NewPATHandler(patService)
 
 	clientIPMiddleware, err := platformmiddleware.NewClientIPMiddleware(a.cfg.TrustedProxyCIDRs)
 	if err != nil {
@@ -383,7 +392,7 @@ func (a *App) buildRouter(
 			})
 
 			r.Group(func(protected chi.Router) {
-				protected.Use(platformmiddleware.AuthMiddleware(authService.ParseAccessToken, a.permissionCache.Load, a.accessTokenBlacklist))
+				protected.Use(platformmiddleware.AuthMiddleware(authService.ParseAccessToken, a.permissionCache.Load, a.accessTokenBlacklist, patService.Authenticate))
 				// Per-user throttle so a single compromised token cannot hammer
 				// expensive endpoints (e.g. HRIS overview, exports). 240 req/min
 				// is high enough to leave normal UI navigation untouched.
@@ -398,6 +407,7 @@ func (a *App) buildRouter(
 				protected.Put("/auth/profile/email", authHandler.ChangeEmail)
 				protected.Post("/auth/profile/avatar", authHandler.UploadProfileAvatar)
 				protected.Post("/auth/change-password", authHandler.ChangePassword)
+				protected.Route("/auth/pat", patHandler.RegisterRoutes)
 				protected.Get("/files/{type}/{id}/{filename}", filesHandler.Serve)
 				protected.With(platformmiddleware.RequireAnyPermission(
 					"admin:roles:view",
@@ -464,6 +474,7 @@ func (a *App) buildRouter(
 				protected.Route("/hris", func(module chi.Router) {
 					module.Use(platformmiddleware.RequireModuleAccess(rbac.ModuleHRIS))
 					module.With(platformmiddleware.RequirePermission("hris:employee:view")).Get("/overview", hrisOverviewHandler.Get)
+					compensationPolicyHandler.RegisterRoutes(module)
 
 					module.Route("/employees", employeesHandler.RegisterRoutes)
 					module.Route("/departments", departmentsHandler.RegisterRoutes)
@@ -495,6 +506,16 @@ func (a *App) buildRouter(
 			})
 		})
 	})
+
+	// MCP endpoint. Tools are derived from the live route table (minus superadmin
+	// + public routes) and dispatched in-process, so they re-enter the tenant +
+	// auth + RBAC chain with the caller's personal access token.
+	mcpTools, err := mcp.BuildCatalog(router)
+	if err != nil {
+		return nil, fmt.Errorf("build mcp catalog: %w", err)
+	}
+	mcpServer := mcp.NewServer(mcpTools, mcp.InProcessExecutor{Handler: func() http.Handler { return a.router }}, "", mcpServerVersion)
+	router.Handle("/mcp", mcpServer.HTTPHandler())
 
 	return router, nil
 }
@@ -787,6 +808,8 @@ func ensureRuntimeDirectories(cfg config.Config) error {
 
 const defaultTenantID = "00000000-0000-0000-0000-000000000001"
 
+const mcpServerVersion = "0.1.0"
+
 // seedTenants ensures every tenant defined in the TENANTS env var exists in the
 // database with the correct name, slug, domains, and a WA config row.
 // The first tenant reuses the well-known UUID created by the migration
@@ -886,6 +909,27 @@ func seedTenants(ctx context.Context, pool *pgxpool.Pool, tenants []config.Tenan
 		trConn.Release()
 		if err != nil {
 			return fmt.Errorf("seed tracker reminder config for tenant %q: %w", tc.Slug, err)
+		}
+
+		// Ensure compensation_policies row exists (defaults seeded, admin tunes via UI).
+		cpConn, err := pool.Acquire(ctx)
+		if err != nil {
+			return fmt.Errorf("acquire conn for compensation policy seed: %w", err)
+		}
+		_, err = cpConn.Exec(ctx, fmt.Sprintf("SET app.current_tenant = '%s'", tenantID))
+		if err != nil {
+			cpConn.Release()
+			return fmt.Errorf("set tenant guc for compensation policy seed: %w", err)
+		}
+		_, err = cpConn.Exec(ctx,
+			`INSERT INTO compensation_policies (tenant_id)
+			 VALUES ($1::uuid)
+			 ON CONFLICT (tenant_id) DO NOTHING`,
+			tenantID)
+		_, _ = cpConn.Exec(ctx, "RESET ALL")
+		cpConn.Release()
+		if err != nil {
+			return fmt.Errorf("seed compensation policy for tenant %q: %w", tc.Slug, err)
 		}
 
 		slog.InfoContext(ctx, "tenant seeded", "name", tc.Name, "slug", tc.Slug, "domains", tc.Domains)

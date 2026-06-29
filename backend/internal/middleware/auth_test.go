@@ -50,7 +50,7 @@ func TestAuthMiddlewareRejectsInactiveUser(t *testing.T) {
 	}
 
 	nextCalled := false
-	handler := AuthMiddleware(parseToken, loadPermissions, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AuthMiddleware(parseToken, loadPermissions, nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		nextCalled = true
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -96,7 +96,7 @@ func TestAuthMiddlewareAllowsActiveUserAndInjectsPrincipal(t *testing.T) {
 		}, nil
 	}
 
-	handler := AuthMiddleware(parseToken, loadPermissions, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AuthMiddleware(parseToken, loadPermissions, nil, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		principal, ok := PrincipalFromContext(r.Context())
 		if !ok {
 			t.Fatal("expected principal in context")

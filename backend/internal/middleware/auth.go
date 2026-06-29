@@ -24,10 +24,16 @@ type contextKey string
 
 const principalContextKey contextKey = "principal"
 
+type patIdentity struct {
+	userID   string
+	tenantID string
+}
+
 func AuthMiddleware(
 	parseToken func(string) (*backendauth.AccessClaims, error),
 	loadPermissions func(context.Context, string) (*rbac.CachedPermissions, error),
 	blacklist *backendauth.AccessTokenBlacklist,
+	authenticatePAT func(context.Context, string) (string, string, error),
 ) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -43,19 +49,38 @@ func AuthMiddleware(
 				return
 			}
 
-			claims, err := parseToken(parts[1])
-			if err != nil {
-				response.WriteError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Access token is invalid or expired", nil)
-				return
-			}
+			rawToken := parts[1]
 
-			if blacklist != nil && blacklist.IsRevoked(claims.ID) {
-				response.WriteError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Access token has been revoked", nil)
-				return
+			var userID, tenantID string
+			if backendauth.IsPersonalAccessToken(rawToken) {
+				if authenticatePAT == nil {
+					response.WriteError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Access token is invalid or expired", nil)
+					return
+				}
+				identity, err := WithScopedTenantConn(r.Context(), func(ctx context.Context) (patIdentity, error) {
+					uid, tid, authErr := authenticatePAT(ctx, rawToken)
+					return patIdentity{userID: uid, tenantID: tid}, authErr
+				})
+				if err != nil {
+					response.WriteError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Access token is invalid or expired", nil)
+					return
+				}
+				userID, tenantID = identity.userID, identity.tenantID
+			} else {
+				claims, err := parseToken(rawToken)
+				if err != nil {
+					response.WriteError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Access token is invalid or expired", nil)
+					return
+				}
+				if blacklist != nil && blacklist.IsRevoked(claims.ID) {
+					response.WriteError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Access token has been revoked", nil)
+					return
+				}
+				userID, tenantID = claims.Subject, claims.TenantID
 			}
 
 			cachedPermissions, err := WithScopedTenantConn(r.Context(), func(ctx context.Context) (*rbac.CachedPermissions, error) {
-				return loadPermissions(ctx, claims.Subject)
+				return loadPermissions(ctx, userID)
 			})
 			if err != nil {
 				response.WriteError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Failed to resolve user permissions", nil)
@@ -75,8 +100,8 @@ func AuthMiddleware(
 			}
 
 			principal := Principal{
-				UserID:       claims.Subject,
-				TenantID:     claims.TenantID,
+				UserID:       userID,
+				TenantID:     tenantID,
 				IsSuperAdmin: cachedPermissions.IsSuperAdmin,
 				Roles:        roles,
 				Permissions:  cachedPermissions.PermissionList(),
