@@ -522,6 +522,17 @@ func (s *Service) ParseAccessToken(token string) (*backendauth.AccessClaims, err
 	return s.tokenManager.ParseAccessToken(token)
 }
 
+// IssueTokensForUser mints a fresh access + refresh token pair for a user
+// without a password, reusing the standard login token issuance. Used by the
+// OAuth authorization-code exchange once the user has approved a client.
+func (s *Service) IssueTokensForUser(ctx context.Context, userID string, userAgent string, ipAddress string) (AuthResult, error) {
+	user, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return AuthResult{}, err
+	}
+	return s.issueAuthResult(ctx, user, "", userAgent, ipAddress)
+}
+
 func (s *Service) GetSession(ctx context.Context, userID string) (AuthResult, error) {
 	user, err := s.repo.GetUserByID(ctx, userID)
 	if err != nil {

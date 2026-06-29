@@ -30,10 +30,11 @@ var excludedSuffixes = []string{
 	"/health",
 }
 
-// excludedContains drops credential self-management endpoints: an AI client must
-// not mint or revoke its own access tokens.
+// excludedContains drops credential and OAuth self-management endpoints: an AI
+// client must not mint or revoke its own tokens or approve OAuth grants.
 var excludedContains = []string{
 	"/auth/pat",
+	"/oauth",
 }
 
 // BuildCatalog derives the MCP tool surface from the live chi route table, so it

@@ -171,6 +171,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	accessTokenBlacklist := backendauth.NewAccessTokenBlacklist(time.Minute)
 	authService := authservice.New(authRepository, employeesRepository, cfg, permissionCache, encrypter, accessTokenBlacklist)
 	patService := authservice.NewPATService(authRepository)
+	oauthService := authservice.NewOAuthService(authRepository, authService)
 
 	projectsRepository := operationalrepo.NewProjectsRepository(pool)
 	kanbanRepository := operationalrepo.NewKanbanRepository(pool)
@@ -244,6 +245,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		auditService,
 		authService,
 		patService,
+		oauthService,
 		adminhandler.NewAuditLogsHandler(auditService),
 		operationalhandler.NewOverviewHandler(operationalOverviewService),
 		operationalhandler.NewProjectsHandler(projectsService, kanbanService, projectsRepository, authRepository),
@@ -302,6 +304,7 @@ func (a *App) buildRouter(
 	auditService *auditservice.Service,
 	authService *authservice.Service,
 	patService *authservice.PATService,
+	oauthService *authservice.OAuthService,
 	auditLogsHandler *adminhandler.AuditLogsHandler,
 	operationalOverviewHandler *operationalhandler.OverviewHandler,
 	projectsHandler *operationalhandler.ProjectsHandler,
@@ -329,6 +332,7 @@ func (a *App) buildRouter(
 	router := chi.NewRouter()
 	authHandler := authhandler.New(authService, a.cfg)
 	patHandler := authhandler.NewPATHandler(patService)
+	oauthHandler := authhandler.NewOAuthHandler(oauthService)
 
 	clientIPMiddleware, err := platformmiddleware.NewClientIPMiddleware(a.cfg.TrustedProxyCIDRs)
 	if err != nil {
@@ -383,6 +387,14 @@ func (a *App) buildRouter(
 	// All API routes require tenant resolution from the Host header.
 	router.Group(func(tenanted chi.Router) {
 		tenanted.Use(platformmiddleware.TenantMiddleware(a.db, a.tenantResolver))
+
+		// OAuth 2.1 authorization server for MCP remote connectors (public).
+		tenanted.Get("/.well-known/oauth-authorization-server", oauthHandler.AuthorizationServerMetadata)
+		tenanted.Get("/.well-known/oauth-protected-resource", oauthHandler.ProtectedResourceMetadata)
+		tenanted.Post("/oauth/register", oauthHandler.Register)
+		tenanted.Get("/oauth/authorize", oauthHandler.Authorize)
+		tenanted.Post("/oauth/token", oauthHandler.Token)
+
 		tenanted.Route("/api/v1", func(r chi.Router) {
 			r.Route("/auth", authHandler.RegisterRoutes)
 			r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -408,6 +420,7 @@ func (a *App) buildRouter(
 				protected.Post("/auth/profile/avatar", authHandler.UploadProfileAvatar)
 				protected.Post("/auth/change-password", authHandler.ChangePassword)
 				protected.Route("/auth/pat", patHandler.RegisterRoutes)
+				protected.Post("/oauth/grant", oauthHandler.Grant)
 				protected.Get("/files/{type}/{id}/{filename}", filesHandler.Serve)
 				protected.With(platformmiddleware.RequireAnyPermission(
 					"admin:roles:view",
@@ -515,6 +528,13 @@ func (a *App) buildRouter(
 		return nil, fmt.Errorf("build mcp catalog: %w", err)
 	}
 	mcpServer := mcp.NewServer(mcpTools, mcp.InProcessExecutor{Handler: func() http.Handler { return a.router }}, "", mcpServerVersion)
+	mcpServer.SetAuthorizer(func(token string) bool {
+		if backendauth.IsPersonalAccessToken(token) {
+			return true
+		}
+		_, err := authService.ParseAccessToken(token)
+		return err == nil
+	})
 	router.Handle("/mcp", mcpServer.HTTPHandler())
 
 	return router, nil
