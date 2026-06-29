@@ -25,6 +25,10 @@ type InProcessExecutor struct {
 }
 
 func (e InProcessExecutor) Execute(req *http.Request) (int, []byte, error) {
+	// Re-enter the router with a fresh context: the incoming /mcp request's
+	// context still carries chi's routing state, which would otherwise be
+	// reused and mis-route this sub-request.
+	req = req.WithContext(context.Background())
 	recorder := httptest.NewRecorder()
 	e.Handler().ServeHTTP(recorder, req)
 	return recorder.Code, recorder.Body.Bytes(), nil
