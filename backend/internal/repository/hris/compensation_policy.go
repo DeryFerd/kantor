@@ -38,6 +38,11 @@ type EmployeeDailyHoursRow struct {
 	ActiveSeconds int64
 }
 
+type EmployeeBaseSalaryRow struct {
+	EmployeeID       string
+	BaseSalaryCipher string
+}
+
 func (r *CompensationPolicyRepository) EnsureRow(ctx context.Context) error {
 	ctx, cancel := repository.QueryContext(ctx)
 	defer cancel()
@@ -159,6 +164,32 @@ func (r *CompensationPolicyRepository) ListDailyHoursViolations(ctx context.Cont
 	for rows.Next() {
 		var row EmployeeDailyHoursRow
 		if err := rows.Scan(&row.EmployeeID, &row.Date, &row.ActiveSeconds); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func (r *CompensationPolicyRepository) ListCurrentBaseSalaries(ctx context.Context, employeeID *string) ([]EmployeeBaseSalaryRow, error) {
+	ctx, cancel := repository.QueryContext(ctx)
+	defer cancel()
+
+	rows, err := repository.DB(ctx, r.db).Query(ctx, `
+		SELECT DISTINCT ON (employee_id) employee_id::text, base_salary
+		FROM salaries
+		WHERE ($1::uuid IS NULL OR employee_id = $1::uuid)
+		ORDER BY employee_id, effective_date DESC, created_at DESC
+	`, employeeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]EmployeeBaseSalaryRow, 0)
+	for rows.Next() {
+		var row EmployeeBaseSalaryRow
+		if err := rows.Scan(&row.EmployeeID, &row.BaseSalaryCipher); err != nil {
 			return nil, err
 		}
 		out = append(out, row)

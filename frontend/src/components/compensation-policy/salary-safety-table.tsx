@@ -37,6 +37,12 @@ const statusLabels: Record<SalarySafetyStatus, string> = {
   no_data: "Tidak ada data",
 };
 
+const rupiahFormatter = new Intl.NumberFormat("id-ID", {
+  style: "currency",
+  currency: "IDR",
+  maximumFractionDigits: 0,
+});
+
 export function SalarySafetyTable() {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
@@ -98,6 +104,7 @@ export function SalarySafetyTable() {
           <thead>
             <tr className="border-b border-border text-xs uppercase tracking-[0.06em] text-text-secondary">
               <th className="py-2 pr-4 font-semibold">Karyawan</th>
+              <th className="py-2 pr-4 font-semibold">Gaji</th>
               <th className="py-2 pr-4 font-semibold">Jam Bulan Ini</th>
               <th className="py-2 pr-4 font-semibold">Min Bulan</th>
               <th className="py-2 pr-4 font-semibold">Pelanggaran Harian</th>
@@ -107,13 +114,13 @@ export function SalarySafetyTable() {
           <tbody>
             {safetyQuery.isLoading ? (
               <tr>
-                <td className="py-4 text-text-secondary" colSpan={5}>
+                <td className="py-4 text-text-secondary" colSpan={6}>
                   Memuat data...
                 </td>
               </tr>
             ) : (safetyQuery.data ?? []).length === 0 ? (
               <tr>
-                <td className="py-4 text-text-secondary" colSpan={5}>
+                <td className="py-4 text-text-secondary" colSpan={6}>
                   Belum ada karyawan untuk dievaluasi.
                 </td>
               </tr>
@@ -124,6 +131,9 @@ export function SalarySafetyTable() {
                   key={evaluation.employee_id}
                 >
                   <td className="py-2 pr-4">{evaluation.full_name}</td>
+                  <td className="py-2 pr-4">
+                    {rupiahFormatter.format(evaluation.base_salary)}
+                  </td>
                   <td className="py-2 pr-4">
                     {evaluation.monthly_active_hours.toFixed(2)} jam
                   </td>

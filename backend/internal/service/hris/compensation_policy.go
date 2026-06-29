@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"strings"
 	"time"
 
 	"github.com/kana-consultant/kantor/backend/internal/model"
 	hrisrepo "github.com/kana-consultant/kantor/backend/internal/repository/hris"
+	"github.com/kana-consultant/kantor/backend/internal/security"
 )
 
 var ErrCompensationPolicyInvalid = errors.New("compensation policy is invalid")
@@ -20,14 +22,16 @@ type compensationPolicyRepository interface {
 	Update(ctx context.Context, params hrisrepo.UpdateCompensationPolicyParams) (model.CompensationPolicy, error)
 	ListMonthlyActiveSeconds(ctx context.Context, from time.Time, to time.Time, employeeID *string) ([]hrisrepo.EmployeeMonthlyHoursRow, error)
 	ListDailyHoursViolations(ctx context.Context, from time.Time, to time.Time, minSeconds int64, employeeID *string) ([]hrisrepo.EmployeeDailyHoursRow, error)
+	ListCurrentBaseSalaries(ctx context.Context, employeeID *string) ([]hrisrepo.EmployeeBaseSalaryRow, error)
 }
 
 type CompensationPolicyService struct {
-	repo compensationPolicyRepository
+	repo      compensationPolicyRepository
+	encrypter *security.Encrypter
 }
 
-func NewCompensationPolicyService(repo compensationPolicyRepository) *CompensationPolicyService {
-	return &CompensationPolicyService{repo: repo}
+func NewCompensationPolicyService(repo compensationPolicyRepository, encrypter *security.Encrypter) *CompensationPolicyService {
+	return &CompensationPolicyService{repo: repo, encrypter: encrypter}
 }
 
 func (s *CompensationPolicyService) GetPolicy(ctx context.Context) (model.CompensationPolicy, error) {
@@ -86,12 +90,18 @@ func (s *CompensationPolicyService) EvaluateSalarySafety(ctx context.Context, ye
 		})
 	}
 
+	baseSalaryByEmployee := s.currentBaseSalaries(ctx, employeeID)
+
 	evaluations := make([]model.SalarySafetyEvaluation, 0, len(monthly))
 	for _, row := range monthly {
 		monthlyHours := secondsToHours(row.ActiveSeconds)
 		violations := violationsByEmployee[row.EmployeeID]
 		if violations == nil {
 			violations = []model.DailyHoursViolation{}
+		}
+		baseSalary := policy.MonthlyBaseSalary
+		if value, ok := baseSalaryByEmployee[row.EmployeeID]; ok {
+			baseSalary = value
 		}
 		evaluations = append(evaluations, model.SalarySafetyEvaluation{
 			EmployeeID:         row.EmployeeID,
@@ -102,12 +112,35 @@ func (s *CompensationPolicyService) EvaluateSalarySafety(ctx context.Context, ye
 			MonthlyActiveHours: monthlyHours,
 			MinHoursPerMonth:   policy.MinHoursPerMonth,
 			MinHoursPerDay:     policy.MinHoursPerDay,
-			BaseSalary:         policy.MonthlyBaseSalary,
+			BaseSalary:         baseSalary,
 			DailyViolations:    violations,
 			Status:             evaluateStatus(row.UserID, monthlyHours, policy.MinHoursPerMonth, violations),
 		})
 	}
 	return evaluations, nil
+}
+
+// currentBaseSalaries returns each employee's latest base salary in plain rupiah,
+// decrypted from the salaries table. Employees without a salary record are
+// absent from the map and fall back to the policy default. A decrypt failure on
+// one row is logged and skipped rather than failing the whole evaluation.
+func (s *CompensationPolicyService) currentBaseSalaries(ctx context.Context, employeeID *string) map[string]int64 {
+	rows, err := s.repo.ListCurrentBaseSalaries(ctx, employeeID)
+	if err != nil {
+		slog.WarnContext(ctx, "failed to load current base salaries", "error", err)
+		return map[string]int64{}
+	}
+
+	result := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		amount, decryptErr := decryptAmount(s.encrypter, row.BaseSalaryCipher)
+		if decryptErr != nil {
+			slog.WarnContext(ctx, "failed to decrypt base salary", "error", decryptErr, "employee_id", row.EmployeeID)
+			continue
+		}
+		result[row.EmployeeID] = amount
+	}
+	return result
 }
 
 func evaluateStatus(userID *string, monthlyHours float64, minMonthly float64, violations []model.DailyHoursViolation) model.SalarySafetyStatus {

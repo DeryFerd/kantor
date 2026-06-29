@@ -85,7 +85,7 @@ export function PolicySettingsCard() {
             className="text-[13px] font-[600] text-text-primary"
             htmlFor="monthly-base-salary"
           >
-            Base Salary Bulanan (Rp)
+            Base Salary Bulanan Default (Rp)
           </label>
           <Input
             className="h-10 rounded-[6px] border-transparent bg-surface-muted px-3 text-[14px] focus:border-ops focus:bg-surface focus:ring-2 focus:ring-ops/20"
@@ -98,6 +98,10 @@ export function PolicySettingsCard() {
             type="number"
             value={monthlyBaseSalary}
           />
+          <p className="text-xs text-text-secondary">
+            Dipakai hanya jika karyawan belum punya data gaji. Gaji per karyawan
+            diambil dari data gaji masing-masing.
+          </p>
         </div>
 
         <div className="space-y-1.5">

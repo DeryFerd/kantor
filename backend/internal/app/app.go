@@ -201,7 +201,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	departmentsService := hrisservice.NewDepartmentsService(departmentsRepository, employeesRepository)
 	payrollCache := hrisservice.NewPayrollCache(5 * time.Minute)
 	compensationService := hrisservice.NewCompensationService(compensationRepository, employeesRepository, encrypter, payrollCache)
-	compensationPolicyService := hrisservice.NewCompensationPolicyService(compensationPolicyRepository)
+	compensationPolicyService := hrisservice.NewCompensationPolicyService(compensationPolicyRepository, encrypter)
 	financeService := hrisservice.NewFinanceService(financeRepository)
 	notificationsService := notificationsservice.New(notificationsRepository)
 	reimbursementsService := hrisservice.NewReimbursementsService(reimbursementsRepository, employeesRepository, authRepository, notificationsService, financeService)
