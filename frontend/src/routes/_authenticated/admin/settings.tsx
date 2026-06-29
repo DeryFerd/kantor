@@ -25,7 +25,7 @@ import {
 } from "@/services/admin-rbac";
 import { toast } from "@/stores/toast-store";
 import { PolicySettingsCard } from "@/components/compensation-policy/policy-settings-card";
-import { SalarySafetyTable } from "@/components/compensation-policy/salary-safety-table";
+import { SalarySafetyOverview } from "@/components/compensation-policy/salary-safety-overview";
 import { TokenManagerCard } from "@/components/personal-access-tokens/token-manager-card";
 
 export const Route = createFileRoute("/_authenticated/admin/settings")({
@@ -1070,7 +1070,7 @@ function AdminSettingsPage() {
           <PolicySettingsCard />
         ) : null}
         {hasPermission(permissions.hrisSalarySafetyView) ? (
-          <SalarySafetyTable />
+          <SalarySafetyOverview />
         ) : null}
         <TokenManagerCard />
       </div>
