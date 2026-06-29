@@ -24,6 +24,9 @@ import {
   updateReimbursementReminder,
 } from "@/services/admin-rbac";
 import { toast } from "@/stores/toast-store";
+import { PolicySettingsCard } from "@/components/compensation-policy/policy-settings-card";
+import { SalarySafetyTable } from "@/components/compensation-policy/salary-safety-table";
+import { TokenManagerCard } from "@/components/personal-access-tokens/token-manager-card";
 
 export const Route = createFileRoute("/_authenticated/admin/settings")({
   beforeLoad: async () => {
@@ -1062,6 +1065,14 @@ function AdminSettingsPage() {
             </Button>
           </div>
         </Card>
+
+        {hasPermission(permissions.hrisCompensationPolicyView) ? (
+          <PolicySettingsCard />
+        ) : null}
+        {hasPermission(permissions.hrisSalarySafetyView) ? (
+          <SalarySafetyTable />
+        ) : null}
+        <TokenManagerCard />
       </div>
     </div>
   );
