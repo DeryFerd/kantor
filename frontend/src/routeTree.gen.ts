@@ -15,6 +15,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as OauthConsentRouteImport } from './routes/oauth/consent'
 import { Route as AuthenticatedProfileRouteImport } from './routes/_authenticated/profile'
 import { Route as AuthenticatedForbiddenRouteImport } from './routes/_authenticated/forbidden'
 import { Route as AuthenticatedOperationalIndexRouteImport } from './routes/_authenticated/operational/index'
@@ -75,6 +76,11 @@ const AuthenticatedRoute = AuthenticatedRouteImport.update({
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OauthConsentRoute = OauthConsentRouteImport.update({
+  id: '/oauth/consent',
+  path: '/oauth/consent',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuthenticatedProfileRoute = AuthenticatedProfileRouteImport.update({
@@ -273,6 +279,7 @@ export interface FileRoutesByFullPath {
   '/reset-password': typeof ResetPasswordRoute
   '/forbidden': typeof AuthenticatedForbiddenRoute
   '/profile': typeof AuthenticatedProfileRoute
+  '/oauth/consent': typeof OauthConsentRoute
   '/admin/audit-logs': typeof AuthenticatedAdminAuditLogsRoute
   '/admin/registration': typeof AuthenticatedAdminRegistrationRoute
   '/admin/roles': typeof AuthenticatedAdminRolesRoute
@@ -312,6 +319,7 @@ export interface FileRoutesByTo {
   '/reset-password': typeof ResetPasswordRoute
   '/forbidden': typeof AuthenticatedForbiddenRoute
   '/profile': typeof AuthenticatedProfileRoute
+  '/oauth/consent': typeof OauthConsentRoute
   '/admin/audit-logs': typeof AuthenticatedAdminAuditLogsRoute
   '/admin/registration': typeof AuthenticatedAdminRegistrationRoute
   '/admin/roles': typeof AuthenticatedAdminRolesRoute
@@ -353,6 +361,7 @@ export interface FileRoutesById {
   '/reset-password': typeof ResetPasswordRoute
   '/_authenticated/forbidden': typeof AuthenticatedForbiddenRoute
   '/_authenticated/profile': typeof AuthenticatedProfileRoute
+  '/oauth/consent': typeof OauthConsentRoute
   '/_authenticated/admin/audit-logs': typeof AuthenticatedAdminAuditLogsRoute
   '/_authenticated/admin/registration': typeof AuthenticatedAdminRegistrationRoute
   '/_authenticated/admin/roles': typeof AuthenticatedAdminRolesRoute
@@ -394,6 +403,7 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/forbidden'
     | '/profile'
+    | '/oauth/consent'
     | '/admin/audit-logs'
     | '/admin/registration'
     | '/admin/roles'
@@ -433,6 +443,7 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/forbidden'
     | '/profile'
+    | '/oauth/consent'
     | '/admin/audit-logs'
     | '/admin/registration'
     | '/admin/roles'
@@ -473,6 +484,7 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/_authenticated/forbidden'
     | '/_authenticated/profile'
+    | '/oauth/consent'
     | '/_authenticated/admin/audit-logs'
     | '/_authenticated/admin/registration'
     | '/_authenticated/admin/roles'
@@ -512,6 +524,7 @@ export interface RootRouteChildren {
   LoginRoute: typeof LoginRoute
   RegisterRoute: typeof RegisterRoute
   ResetPasswordRoute: typeof ResetPasswordRoute
+  OauthConsentRoute: typeof OauthConsentRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -556,6 +569,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/oauth/consent': {
+      id: '/oauth/consent'
+      path: '/oauth/consent'
+      fullPath: '/oauth/consent'
+      preLoaderRoute: typeof OauthConsentRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_authenticated/profile': {
@@ -874,6 +894,7 @@ const rootRouteChildren: RootRouteChildren = {
   LoginRoute: LoginRoute,
   RegisterRoute: RegisterRoute,
   ResetPasswordRoute: ResetPasswordRoute,
+  OauthConsentRoute: OauthConsentRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

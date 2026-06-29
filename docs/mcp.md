@@ -36,6 +36,22 @@ Authorization: Bearer kantor_pat_…
 Each request is a single JSON-RPC message; the response is a single JSON-RPC reply.
 The `Host` header selects the tenant, so use the tenant's own domain.
 
+### Claude Desktop custom connector (OAuth)
+
+Claude Desktop's **Settings → Connectors → Add custom connector** speaks OAuth, not
+static tokens. The backend is an OAuth 2.1 authorization server for exactly this:
+
+1. Name it anything; set **Remote MCP server URL** to `https://app.yourtenant.com/mcp`.
+2. Leave **OAuth Client ID / Secret** blank — the server supports Dynamic Client
+   Registration, so Claude registers itself.
+3. Click **Add**. Claude hits `/mcp`, gets `401` + `WWW-Authenticate`, discovers the
+   authorization server, and opens a browser to the Kantor consent page.
+4. Log in with your Kantor account and click **Izinkan** (Allow). Tokens map to your
+   user, so every tool call is enforced by your RBAC.
+
+Flow: Authorization Code + PKCE (S256). Endpoints: `/.well-known/oauth-authorization-server`,
+`/.well-known/oauth-protected-resource`, `/oauth/register`, `/oauth/authorize`, `/oauth/token`.
+
 ## Transport B — Local stdio (`kantor-mcp`)
 
 For clients that speak stdio (e.g. Claude Desktop), run the bundled binary, which

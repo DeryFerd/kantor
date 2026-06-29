@@ -1,10 +1,19 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Copy, KeyRound, Plus, Trash2 } from "lucide-react";
+import { Copy, Info, KeyRound, Plus, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { env } from "@/lib/env";
 import {
   createPersonalAccessToken,
   listPersonalAccessTokens,
@@ -12,6 +21,14 @@ import {
   revokePersonalAccessToken,
 } from "@/services/personal-access-tokens";
 import { toast } from "@/stores/toast-store";
+
+function resolveMcpConfig() {
+  const apiBase = env.VITE_API_BASE_URL;
+  const origin = apiBase.startsWith("/")
+    ? window.location.origin
+    : apiBase.replace(/\/api\/v1\/?$/, "");
+  return { mcpUrl: `${origin}/mcp`, baseUrl: origin, host: new URL(origin).host };
+}
 
 function formatTimestamp(value?: string | null) {
   if (!value) {
@@ -29,6 +46,8 @@ export function TokenManagerCard() {
   const [name, setName] = useState("");
   const [expiresInDays, setExpiresInDays] = useState("");
   const [createdToken, setCreatedToken] = useState<string | null>(null);
+  const [isInfoOpen, setIsInfoOpen] = useState(false);
+  const mcp = resolveMcpConfig();
 
   const tokensQuery = useQuery({
     queryKey: personalAccessTokenKeys.list(),
@@ -88,20 +107,118 @@ export function TokenManagerCard() {
 
   return (
     <Card className="space-y-5 p-6 xl:col-span-2">
-      <div className="flex items-start gap-3">
-        <div className="rounded-md bg-error-light p-3 text-error">
-          <KeyRound className="h-5 w-5" />
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <div className="rounded-md bg-error-light p-3 text-error">
+            <KeyRound className="h-5 w-5" />
+          </div>
+          <div>
+            <h2 className="font-display text-[18px] font-[700] text-text-primary">
+              Access Token (MCP)
+            </h2>
+            <p className="mt-1 text-sm text-text-secondary">
+              Buat personal access token untuk binding KANTOR ke Claude / Hermes
+              via MCP. Token mewarisi permission akun Anda.
+            </p>
+          </div>
         </div>
-        <div>
-          <h2 className="font-display text-[18px] font-[700] text-text-primary">
-            Access Token (MCP)
-          </h2>
-          <p className="mt-1 text-sm text-text-secondary">
-            Buat personal access token untuk binding KANTOR ke Claude / Hermes
-            via MCP. Token mewarisi permission akun Anda.
-          </p>
-        </div>
+        <button
+          aria-label="Cara hubungkan ke Claude Desktop"
+          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border text-text-secondary transition hover:bg-surface-muted hover:text-text-primary"
+          onClick={() => setIsInfoOpen(true)}
+          type="button"
+        >
+          <Info className="h-4.5 w-4.5" />
+        </button>
       </div>
+
+      <Dialog onOpenChange={setIsInfoOpen} open={isInfoOpen}>
+        <DialogContent size="lg">
+          <DialogHeader>
+            <DialogTitle>Hubungkan ke Claude Desktop</DialogTitle>
+            <DialogDescription>
+              Server MCP ini memakai Personal Access Token (Bearer), bukan OAuth.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogBody>
+            <div className="space-y-4 text-sm text-text-secondary">
+              <div>
+                <p className="font-semibold text-text-primary">Endpoint MCP</p>
+                <code className="mt-1 block overflow-x-auto rounded-md bg-surface-muted px-3 py-2 font-mono text-[13px] text-text-primary">
+                  {mcp.mcpUrl}
+                </code>
+              </div>
+
+              <div className="space-y-2">
+                <p className="font-semibold text-text-primary">
+                  Cara A — Connectors (remote, paling gampang)
+                </p>
+                <ol className="list-decimal space-y-1 pl-5">
+                  <li>
+                    Claude Desktop → Settings → Connectors → Add custom
+                    connector.
+                  </li>
+                  <li>
+                    Remote MCP server URL ={" "}
+                    <code className="font-mono">{mcp.mcpUrl}</code> → Add.
+                  </li>
+                  <li>
+                    Browser kebuka → login KANTOR → klik{" "}
+                    <strong>Izinkan</strong>. OAuth Client ID/Secret biarkan
+                    kosong.
+                  </li>
+                </ol>
+              </div>
+
+              <div className="space-y-2">
+                <p className="font-semibold text-text-primary">
+                  Cara B — Config file (stdio, pakai PAT)
+                </p>
+                <ol className="list-decimal space-y-1 pl-5">
+                  <li>Buat token di kartu ini, lalu salin.</li>
+                  <li>
+                    Build binary:{" "}
+                    <code className="font-mono">
+                      go build -o kantor-mcp ./backend/cmd/mcp
+                    </code>
+                  </li>
+                  <li>Claude Desktop → Settings → Developer → Edit Config.</li>
+                  <li>
+                    Tempel ke{" "}
+                    <code className="font-mono">
+                      claude_desktop_config.json
+                    </code>
+                    :
+                  </li>
+                </ol>
+                <pre className="overflow-x-auto rounded-md bg-surface-muted px-3 py-3 font-mono text-[12px] leading-relaxed text-text-primary">
+                  {`{
+  "mcpServers": {
+    "kantor": {
+      "command": "/path/ke/kantor-mcp",
+      "env": {
+        "KANTOR_BASE_URL": "${mcp.baseUrl}",
+        "KANTOR_PAT": "kantor_pat_...",
+        "KANTOR_TENANT_HOST": "${mcp.host}"
+      }
+    }
+  }
+}`}
+                </pre>
+                <p>Restart Claude Desktop → tools KANTOR muncul.</p>
+              </div>
+
+              <div className="rounded-md border border-border bg-surface-muted/40 p-3 text-text-primary">
+                <p className="font-semibold">OAuth Client ID / Secret?</p>
+                <p className="mt-1 text-text-secondary">
+                  Kosongkan saja — KANTOR pakai Dynamic Client Registration, jadi
+                  Claude mendaftar sendiri otomatis.
+                </p>
+              </div>
+            </div>
+          </DialogBody>
+        </DialogContent>
+      </Dialog>
 
       {createdToken ? (
         <div className="space-y-2 rounded-md border border-warning/40 bg-warning-light p-4">

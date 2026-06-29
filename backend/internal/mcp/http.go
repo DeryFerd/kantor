@@ -3,6 +3,7 @@ package mcp
 import (
 	"io"
 	"net/http"
+	"strings"
 )
 
 const maxRequestBytes = 1 << 20
@@ -16,6 +17,16 @@ func (s *Server) HTTPHandler() http.Handler {
 			w.Header().Set("Allow", http.MethodPost)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
+		}
+
+		if s.authorize != nil {
+			token := bearerToken(r.Header.Get("Authorization"))
+			if token == "" || !s.authorize(token) {
+				resourceMetadata := requestBaseURL(r) + "/.well-known/oauth-protected-resource"
+				w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+resourceMetadata+`"`)
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
 		}
 
 		raw, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBytes))
@@ -34,4 +45,20 @@ func (s *Server) HTTPHandler() http.Handler {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(encoded)
 	})
+}
+
+func bearerToken(header string) string {
+	parts := strings.SplitN(strings.TrimSpace(header), " ", 2)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		return ""
+	}
+	return strings.TrimSpace(parts[1])
+}
+
+func requestBaseURL(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host
 }

@@ -27,6 +27,7 @@ func TestBuildCatalogFiltersAndNames(t *testing.T) {
 		api.Post("/auth/pat", handler)
 		api.Delete("/auth/pat/{tokenID}", handler)
 		api.Post("/auth/change-password", handler)
+		api.Post("/oauth/grant", handler)
 	})
 	router.Get("/healthz", handler)
 
@@ -55,6 +56,7 @@ func TestBuildCatalogFiltersAndNames(t *testing.T) {
 		"post_auth_pat",
 		"delete_auth_pat_tokenid",
 		"post_auth_change_password",
+		"post_oauth_grant",
 		"get_healthz",
 	}
 	for _, name := range wantAbsent {

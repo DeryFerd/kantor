@@ -8,11 +8,19 @@ import (
 const serverName = "kantor-mcp"
 
 type Server struct {
-	tools    []ToolSpec
-	byName   map[string]ToolSpec
-	executor Executor
-	baseURL  string
-	version  string
+	tools     []ToolSpec
+	byName    map[string]ToolSpec
+	executor  Executor
+	baseURL   string
+	version   string
+	authorize func(token string) bool
+}
+
+// SetAuthorizer registers a bearer-token validator. When set, the HTTP
+// transport replies 401 + WWW-Authenticate (triggering OAuth discovery) for
+// requests without a valid token.
+func (s *Server) SetAuthorizer(fn func(token string) bool) {
+	s.authorize = fn
 }
 
 func NewServer(tools []ToolSpec, executor Executor, baseURL string, version string) *Server {
