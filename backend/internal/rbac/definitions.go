@@ -186,6 +186,9 @@ func DefaultPermissions() []PermissionDefinition {
 		{ID: "hris:reimbursement:edit", ModuleID: ModuleHRIS, Resource: "reimbursement", Action: "edit", Description: "Mengedit reimbursement dan upload attachment"},
 		{ID: "hris:reimbursement:approve", ModuleID: ModuleHRIS, Resource: "reimbursement", Action: "approve", Description: "Approve atau reject reimbursement"},
 		{ID: "hris:reimbursement:mark_paid", ModuleID: ModuleHRIS, Resource: "reimbursement", Action: "mark_paid", Description: "Menandai reimbursement sudah dibayar", IsSensitive: true},
+		{ID: "hris:compensation_policy:view", ModuleID: ModuleHRIS, Resource: "compensation_policy", Action: "view", Description: "Melihat aturan kompensasi dan jam minimal tenant"},
+		{ID: "hris:compensation_policy:manage", ModuleID: ModuleHRIS, Resource: "compensation_policy", Action: "manage", Description: "Mengatur base salary dan ambang jam kerja minimal", IsSensitive: true},
+		{ID: "hris:salary_safety:view", ModuleID: ModuleHRIS, Resource: "salary_safety", Action: "view", Description: "Melihat status keamanan gaji karyawan berdasarkan jam kerja", IsSensitive: true},
 
 		// Marketing
 		{ID: "marketing:campaign:view", ModuleID: ModuleMarketing, Resource: "campaign", Action: "view", Description: "Melihat campaign"},

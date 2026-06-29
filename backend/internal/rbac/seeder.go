@@ -39,6 +39,10 @@ func SeedDefaults(ctx context.Context, db repository.DBTX) error {
 		return err
 	}
 
+	if err = ensureBaselinePermissions(ctx, tx, roleIDs); err != nil {
+		return err
+	}
+
 	if err = seedSettings(ctx, tx, roleIDs); err != nil {
 		return err
 	}
@@ -161,6 +165,72 @@ func seedRolePermissions(ctx context.Context, tx pgx.Tx, roleIDs map[string]stri
 				return fmt.Errorf("assign permission %s to role %s: %w", permissionID, role.Slug, err)
 			}
 		}
+	}
+
+	return nil
+}
+
+var baselinePermissionVersions = map[int][]string{
+	1: {
+		"hris:compensation_policy:view",
+		"hris:compensation_policy:manage",
+		"hris:salary_safety:view",
+	},
+}
+
+const currentBaselineVersion = 1
+
+func ensureBaselinePermissions(ctx context.Context, tx pgx.Tx, roleIDs map[string]string) error {
+	var stored int
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(MAX((value->>'version')::int), 0)
+		FROM system_settings
+		WHERE key = 'rbac_baseline_version'
+	`).Scan(&stored); err != nil {
+		return fmt.Errorf("read rbac baseline version: %w", err)
+	}
+	if stored >= currentBaselineVersion {
+		return nil
+	}
+
+	pending := make(map[string]struct{})
+	for version := stored + 1; version <= currentBaselineVersion; version++ {
+		for _, permissionID := range baselinePermissionVersions[version] {
+			pending[permissionID] = struct{}{}
+		}
+	}
+
+	insertQuery := `
+		INSERT INTO role_permissions (role_id, permission_id)
+		VALUES ($1::uuid, $2)
+		ON CONFLICT DO NOTHING
+	`
+	for _, role := range SystemRoles() {
+		if role.Slug == RoleSuperAdmin {
+			continue
+		}
+
+		roleID, ok := roleIDs[role.Slug]
+		if !ok {
+			return fmt.Errorf("system role %s missing from seed map", role.Slug)
+		}
+
+		for _, permissionID := range SystemRolePermissionIDs(role.Slug) {
+			if _, isPending := pending[permissionID]; !isPending {
+				continue
+			}
+			if _, err := tx.Exec(ctx, insertQuery, roleID, permissionID); err != nil {
+				return fmt.Errorf("grant baseline permission %s to role %s: %w", permissionID, role.Slug, err)
+			}
+		}
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO system_settings (key, value, description)
+		VALUES ('rbac_baseline_version', $1::jsonb, 'Versi baseline permission system role yang sudah di-grant')
+		ON CONFLICT (tenant_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+	`, fmt.Sprintf(`{"version": %d}`, currentBaselineVersion)); err != nil {
+		return fmt.Errorf("persist rbac baseline version: %w", err)
 	}
 
 	return nil

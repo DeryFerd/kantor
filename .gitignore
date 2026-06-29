@@ -27,6 +27,7 @@ frontend/.vite/
 .env
 .env.local
 .env.*.local
+graphify-out/
 
 # ── Docker ────────────────────────────────────────────────────────────────────
 pgdata/

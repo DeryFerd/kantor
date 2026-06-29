@@ -11,6 +11,8 @@ import { StatusBadge } from "@/components/shared/status-badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { SalarySafetyOverview } from "@/components/compensation-policy/salary-safety-overview";
+import { TeamWorkHours } from "@/components/compensation-policy/team-work-hours";
 import { useRBAC } from "@/hooks/use-rbac";
 import { formatCalendarDate } from "@/lib/date";
 import { permissions } from "@/lib/permissions";
@@ -44,6 +46,7 @@ function EmployeesPage() {
   const { hasPermission } = useRBAC();
   const [filters, setFilters] = useState<EmployeeFilters>(defaultFilters);
   const [employeeToDelete, setEmployeeToDelete] = useState<Employee | null>(null);
+  const [tab, setTab] = useState<"details" | "workhour" | "salaries">("details");
 
   const departmentsQuery = useQuery({
     queryKey: departmentsKeys.list(),
@@ -177,6 +180,14 @@ function EmployeesPage() {
         </div>
       </Card>
 
+      <div className="flex flex-wrap gap-3">
+        <Button onClick={() => setTab("details")} variant={tab === "details" ? "default" : "outline"}>Details</Button>
+        <Button onClick={() => setTab("workhour")} variant={tab === "workhour" ? "default" : "outline"}>Work Hour</Button>
+        <Button onClick={() => setTab("salaries")} variant={tab === "salaries" ? "default" : "outline"}>Salaries</Button>
+      </div>
+
+      {tab === "details" ? (
+        <>
       <Card className="p-4 sm:p-5">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <Input
@@ -266,6 +277,24 @@ function EmployeesPage() {
             : undefined
         }
       />
+        </>
+      ) : null}
+
+      {tab === "workhour" ? (
+        hasPermission(permissions.hrisSalarySafetyView) ? (
+          <TeamWorkHours />
+        ) : (
+          <Card className="p-6 text-sm text-text-secondary">Anda tidak punya akses melihat jam kerja karyawan.</Card>
+        )
+      ) : null}
+
+      {tab === "salaries" ? (
+        hasPermission(permissions.hrisSalarySafetyView) ? (
+          <SalarySafetyOverview />
+        ) : (
+          <Card className="p-6 text-sm text-text-secondary">Anda tidak punya akses melihat data keamanan gaji.</Card>
+        )
+      ) : null}
 
       <ConfirmDialog
         confirmLabel="Hapus employee"
