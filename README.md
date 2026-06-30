@@ -404,6 +404,12 @@ This project is licensed under the MIT License &mdash; see the [LICENSE](LICENSE
 
 ---
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=kana-consultant/kantor&type=Date&theme=dark" />
+  <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=kana-consultant/kantor&type=Date" />
+  <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=kana-consultant/kantor&type=Date" />
+</picture>
+
 <div align="center">
 
 **KANTOR** &mdash; Operational. HRIS. Marketing. All in one.
