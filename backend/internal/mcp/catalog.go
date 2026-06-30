@@ -62,6 +62,7 @@ func BuildCatalog(router chi.Routes) ([]ToolSpec, error) {
 			Method:       method,
 			PathTemplate: route,
 			PathParams:   pathParams(route),
+			Meta:         annotationFor(method, route),
 		})
 		return nil
 	})
