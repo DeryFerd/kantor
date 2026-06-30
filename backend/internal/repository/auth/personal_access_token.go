@@ -20,6 +20,7 @@ type CreatePersonalAccessTokenParams struct {
 	TokenHash   string
 	TokenPrefix string
 	ExpiresAt   *time.Time
+	Scope       *string
 }
 
 func (r *Repository) CreatePersonalAccessToken(ctx context.Context, params CreatePersonalAccessTokenParams) (model.PersonalAccessToken, error) {
@@ -28,17 +29,21 @@ func (r *Repository) CreatePersonalAccessToken(ctx context.Context, params Creat
 
 	var token model.PersonalAccessToken
 	var lastUsedAt, expiresAt sql.NullTime
+	var scope sql.NullString
 	err := repository.DB(ctx, r.db).QueryRow(ctx, `
-		INSERT INTO personal_access_tokens (user_id, name, token_hash, token_prefix, expires_at)
-		VALUES ($1::uuid, $2, $3, $4, $5)
-		RETURNING id::text, name, token_prefix, last_used_at, expires_at, created_at
-	`, params.UserID, params.Name, params.TokenHash, params.TokenPrefix, params.ExpiresAt).Scan(
-		&token.ID, &token.Name, &token.TokenPrefix, &lastUsedAt, &expiresAt, &token.CreatedAt,
+		INSERT INTO personal_access_tokens (user_id, name, token_hash, token_prefix, expires_at, scope)
+		VALUES ($1::uuid, $2, $3, $4, $5, $6)
+		RETURNING id::text, name, token_prefix, scope, last_used_at, expires_at, created_at
+	`, params.UserID, params.Name, params.TokenHash, params.TokenPrefix, params.ExpiresAt, params.Scope).Scan(
+		&token.ID, &token.Name, &token.TokenPrefix, &scope, &lastUsedAt, &expiresAt, &token.CreatedAt,
 	)
 	if err != nil {
 		return model.PersonalAccessToken{}, err
 	}
 
+	if scope.Valid {
+		token.Scope = &scope.String
+	}
 	token.LastUsedAt = authNullTimePointer(lastUsedAt)
 	token.ExpiresAt = authNullTimePointer(expiresAt)
 	return token, nil
@@ -49,7 +54,7 @@ func (r *Repository) ListPersonalAccessTokens(ctx context.Context, userID string
 	defer cancel()
 
 	rows, err := repository.DB(ctx, r.db).Query(ctx, `
-		SELECT id::text, name, token_prefix, last_used_at, expires_at, created_at
+		SELECT id::text, name, token_prefix, scope, last_used_at, expires_at, created_at
 		FROM personal_access_tokens
 		WHERE user_id = $1::uuid AND revoked_at IS NULL
 		ORDER BY created_at DESC
@@ -63,8 +68,12 @@ func (r *Repository) ListPersonalAccessTokens(ctx context.Context, userID string
 	for rows.Next() {
 		var token model.PersonalAccessToken
 		var lastUsedAt, expiresAt sql.NullTime
-		if err := rows.Scan(&token.ID, &token.Name, &token.TokenPrefix, &lastUsedAt, &expiresAt, &token.CreatedAt); err != nil {
+		var scope sql.NullString
+		if err := rows.Scan(&token.ID, &token.Name, &token.TokenPrefix, &scope, &lastUsedAt, &expiresAt, &token.CreatedAt); err != nil {
 			return nil, err
+		}
+		if scope.Valid {
+			token.Scope = &scope.String
 		}
 		token.LastUsedAt = authNullTimePointer(lastUsedAt)
 		token.ExpiresAt = authNullTimePointer(expiresAt)
@@ -73,24 +82,28 @@ func (r *Repository) ListPersonalAccessTokens(ctx context.Context, userID string
 	return out, rows.Err()
 }
 
-func (r *Repository) GetActivePersonalAccessTokenByHash(ctx context.Context, tokenHash string) (userID string, tenantID string, err error) {
+func (r *Repository) GetActivePersonalAccessTokenByHash(ctx context.Context, tokenHash string) (userID string, tenantID string, scope *string, err error) {
 	ctx, cancel := repository.QueryContext(ctx)
 	defer cancel()
 
+	var scopeValue sql.NullString
 	err = repository.DB(ctx, r.db).QueryRow(ctx, `
-		SELECT user_id::text, tenant_id::text
+		SELECT user_id::text, tenant_id::text, scope
 		FROM personal_access_tokens
 		WHERE token_hash = $1
 		  AND revoked_at IS NULL
 		  AND (expires_at IS NULL OR expires_at > NOW())
-	`, tokenHash).Scan(&userID, &tenantID)
+	`, tokenHash).Scan(&userID, &tenantID, &scopeValue)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return "", "", ErrPersonalAccessTokenNotFound
+			return "", "", nil, ErrPersonalAccessTokenNotFound
 		}
-		return "", "", err
+		return "", "", nil, err
 	}
-	return userID, tenantID, nil
+	if scopeValue.Valid {
+		scope = &scopeValue.String
+	}
+	return userID, tenantID, scope, nil
 }
 
 func (r *Repository) TouchPersonalAccessToken(ctx context.Context, tokenHash string) error {

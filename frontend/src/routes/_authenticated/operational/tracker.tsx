@@ -111,6 +111,7 @@ async function issueExtensionToken(): Promise<string> {
   const created = await createPersonalAccessToken({
     name: EXTENSION_PAT_NAME,
     expires_in_days: 365,
+    scope: "tracker",
   });
   return created.token;
 }

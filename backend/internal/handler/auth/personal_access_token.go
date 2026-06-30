@@ -47,7 +47,7 @@ func (h *PATHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, item, err := h.service.Issue(r.Context(), principal.UserID, req.Name, req.ExpiresInDays, time.Now())
+	token, item, err := h.service.Issue(r.Context(), principal.UserID, req.Name, req.ExpiresInDays, req.Scope, time.Now())
 	if err != nil {
 		platformmiddleware.LoggerFromContext(r.Context()).Error("create personal access token failed", "error", err, "user_id", principal.UserID)
 		response.WriteInternalError(r.Context(), w, err, "Failed to create access token")
@@ -107,6 +107,7 @@ func toPATResponse(item model.PersonalAccessToken) dto.PersonalAccessTokenRespon
 		ID:          item.ID,
 		Name:        item.Name,
 		TokenPrefix: item.TokenPrefix,
+		Scope:       item.Scope,
 		CreatedAt:   item.CreatedAt.Format(time.RFC3339),
 	}
 	if item.LastUsedAt != nil {

@@ -16,7 +16,7 @@ var ErrInvalidPersonalAccessToken = errors.New("invalid personal access token")
 type patRepository interface {
 	CreatePersonalAccessToken(ctx context.Context, params authrepo.CreatePersonalAccessTokenParams) (model.PersonalAccessToken, error)
 	ListPersonalAccessTokens(ctx context.Context, userID string) ([]model.PersonalAccessToken, error)
-	GetActivePersonalAccessTokenByHash(ctx context.Context, tokenHash string) (string, string, error)
+	GetActivePersonalAccessTokenByHash(ctx context.Context, tokenHash string) (string, string, *string, error)
 	TouchPersonalAccessToken(ctx context.Context, tokenHash string) error
 	RevokePersonalAccessToken(ctx context.Context, userID string, tokenID string) error
 }
@@ -29,7 +29,7 @@ func NewPATService(repo patRepository) *PATService {
 	return &PATService{repo: repo}
 }
 
-func (s *PATService) Issue(ctx context.Context, userID string, name string, expiresInDays *int, now time.Time) (string, model.PersonalAccessToken, error) {
+func (s *PATService) Issue(ctx context.Context, userID string, name string, expiresInDays *int, scope *string, now time.Time) (string, model.PersonalAccessToken, error) {
 	token, hash, prefix, err := backendauth.GeneratePersonalAccessToken()
 	if err != nil {
 		return "", model.PersonalAccessToken{}, err
@@ -47,6 +47,7 @@ func (s *PATService) Issue(ctx context.Context, userID string, name string, expi
 		TokenHash:   hash,
 		TokenPrefix: prefix,
 		ExpiresAt:   expiresAt,
+		Scope:       scope,
 	})
 	if err != nil {
 		return "", model.PersonalAccessToken{}, err
@@ -65,19 +66,19 @@ func (s *PATService) Revoke(ctx context.Context, userID string, tokenID string) 
 // Authenticate resolves a personal access token to its owning user and tenant.
 // It runs under the request's tenant-scoped connection, so RLS guarantees a
 // token only resolves within the tenant it was issued for.
-func (s *PATService) Authenticate(ctx context.Context, token string) (userID string, tenantID string, err error) {
+func (s *PATService) Authenticate(ctx context.Context, token string) (userID string, tenantID string, scope *string, err error) {
 	if !backendauth.IsPersonalAccessToken(token) {
-		return "", "", ErrInvalidPersonalAccessToken
+		return "", "", nil, ErrInvalidPersonalAccessToken
 	}
 
 	hash := backendauth.HashRefreshToken(token)
-	userID, tenantID, err = s.repo.GetActivePersonalAccessTokenByHash(ctx, hash)
+	userID, tenantID, scope, err = s.repo.GetActivePersonalAccessTokenByHash(ctx, hash)
 	if err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
 
 	if touchErr := s.repo.TouchPersonalAccessToken(ctx, hash); touchErr != nil {
 		slog.WarnContext(ctx, "failed to touch personal access token last_used_at", "error", touchErr)
 	}
-	return userID, tenantID, nil
+	return userID, tenantID, scope, nil
 }

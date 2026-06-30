@@ -4,6 +4,7 @@ export type PersonalAccessToken = {
   id: string;
   name: string;
   token_prefix: string;
+  scope?: string | null;
   last_used_at?: string | null;
   expires_at?: string | null;
   created_at: string;
@@ -12,6 +13,7 @@ export type PersonalAccessToken = {
 export type CreatePersonalAccessTokenPayload = {
   name: string;
   expires_in_days?: number;
+  scope?: string;
 };
 
 export type PersonalAccessTokenCreated = {
