@@ -93,6 +93,11 @@ func (s *TrackerService) StartSession(ctx context.Context, userID string, reques
 	if request.Timestamp != nil {
 		startedAt = *request.Timestamp
 	}
+	// Never let a client start a session dated in the future (skewed clock or
+	// abuse) — it would bucket activity into a future date.
+	if startedAt.After(now) {
+		startedAt = now
+	}
 
 	return s.repo.StartSession(ctx, userID, operationalrepo.TrackerStartSessionParams{
 		StartedAt:             startedAt,
@@ -143,10 +148,21 @@ func (s *TrackerService) RecordBatch(ctx context.Context, userID string, request
 	sortHeartbeats(entries)
 
 	result := TrackerBatchResult{}
+	var currentSessionID string
 	for _, entry := range entries {
-		if _, _, err := s.RecordHeartbeat(ctx, userID, entry, now); err != nil {
+		// If an earlier entry's session was rotated/recreated server-side (e.g. a
+		// stale-gap close), route the remaining replayed beats to the new session
+		// instead of the now-closed original so post-gap activity is not dropped.
+		if currentSessionID != "" {
+			entry.SessionID = currentSessionID
+		}
+		_, session, err := s.RecordHeartbeat(ctx, userID, entry, now)
+		if err != nil {
 			result.Skipped++
 			continue
+		}
+		if session.ID != "" {
+			currentSessionID = session.ID
 		}
 		result.Processed++
 	}

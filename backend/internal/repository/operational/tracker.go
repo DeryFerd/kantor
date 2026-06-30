@@ -295,6 +295,13 @@ func (r *TrackerRepository) RecordHeartbeat(ctx context.Context, params TrackerH
 		}
 	}()
 
+	// Serialize per-user session creation with StartSession so the stale/rotation
+	// recreate path below cannot race a concurrent StartSession into a duplicate
+	// active session (which the one-active unique index would reject with a 500).
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, params.UserID); err != nil {
+		return model.ActivityEntry{}, model.ActivitySession{}, err
+	}
+
 	session, err := r.getSessionForUpdate(ctx, tx, params.UserID, params.SessionID)
 	if err != nil {
 		return model.ActivityEntry{}, model.ActivitySession{}, err
