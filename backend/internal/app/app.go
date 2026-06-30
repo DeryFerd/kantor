@@ -391,9 +391,15 @@ func (a *App) buildRouter(
 		// OAuth 2.1 authorization server for MCP remote connectors (public).
 		tenanted.Get("/.well-known/oauth-authorization-server", oauthHandler.AuthorizationServerMetadata)
 		tenanted.Get("/.well-known/oauth-protected-resource", oauthHandler.ProtectedResourceMetadata)
-		tenanted.Post("/oauth/register", oauthHandler.Register)
-		tenanted.Get("/oauth/authorize", oauthHandler.Authorize)
-		tenanted.Post("/oauth/token", oauthHandler.Token)
+		tenanted.With(platformmiddleware.NewIPRateLimit(10, time.Minute,
+			"RATE_LIMITED", "Too many client registration attempts. Try again later.",
+		)).Post("/oauth/register", oauthHandler.Register)
+		tenanted.With(platformmiddleware.NewIPRateLimit(20, time.Minute,
+			"RATE_LIMITED", "Too many authorization requests. Try again later.",
+		)).Get("/oauth/authorize", oauthHandler.Authorize)
+		tenanted.With(platformmiddleware.NewIPRateLimit(20, time.Minute,
+			"RATE_LIMITED", "Too many token requests. Try again later.",
+		)).Post("/oauth/token", oauthHandler.Token)
 
 		tenanted.Route("/api/v1", func(r chi.Router) {
 			r.Route("/auth", authHandler.RegisterRoutes)

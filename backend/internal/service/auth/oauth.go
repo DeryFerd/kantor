@@ -3,7 +3,6 @@ package auth
 import (
 	"context"
 	"errors"
-	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -46,8 +45,7 @@ func (s *OAuthService) RegisterClient(ctx context.Context, clientName string, re
 		return RegisterClientResult{}, ErrOAuthInvalidRequest
 	}
 	for _, uri := range redirectURIs {
-		parsed, err := url.Parse(uri)
-		if err != nil || parsed.Scheme == "" {
+		if err := oauth.ValidateRedirectURI(uri); err != nil {
 			return RegisterClientResult{}, ErrOAuthInvalidRedirect
 		}
 	}
