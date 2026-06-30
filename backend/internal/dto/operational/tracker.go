@@ -22,7 +22,7 @@ type TrackerHeartbeatRequest struct {
 }
 
 type TrackerBatchEntriesRequest struct {
-	Entries []TrackerHeartbeatRequest `json:"entries" validate:"required,min=1,dive"`
+	Entries []TrackerHeartbeatRequest `json:"entries" validate:"required,min=1,max=500,dive"`
 }
 
 type TrackerConsentRequest struct{}
@@ -32,7 +32,7 @@ type TrackerEndSessionRequest struct {
 }
 
 type DomainCategoryRequest struct {
-	DomainPattern string `json:"domain_pattern" validate:"required,max=255"`
+	DomainPattern string `json:"domain_pattern" validate:"required,max=255,excludesall=%_"`
 	Category      string `json:"category" validate:"required,oneof=work communication social_media entertainment development design documentation other uncategorized"`
 	IsProductive  bool   `json:"is_productive"`
 }

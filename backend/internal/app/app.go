@@ -760,6 +760,26 @@ func (a *App) startBackgroundJobs(authService *authservice.Service, subscription
 			}
 		}
 	})
+
+	runBackground("tracker_stale_session_sweeper", func() {
+		// Close sessions orphaned by crashed/disconnected extensions so a later
+		// heartbeat or StartSession cannot resurrect a stale session and
+		// back-fill the offline gap as active time.
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case tickAt := <-ticker.C:
+				runPerTenant("tracker_stale_sessions", func(tCtx context.Context, t tenant.Info) error {
+					_, err := trackerService.EndStaleSessions(tCtx, tickAt)
+					return err
+				})
+			}
+		}
+	})
 }
 
 func runMigrations(databaseURL string) error {
