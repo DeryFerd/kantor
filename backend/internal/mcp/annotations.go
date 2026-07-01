@@ -1,12 +1,7 @@
 package mcp
 
-// endpointAnnotations curates query/pagination metadata for the data-heavy
-// list & query endpoints. The tool surface is still derived 1:1 from the live
-// route table (catalog.go); this only ENRICHES matching routes so AI clients can
-// discover the real filters and page through all results. Routes without an
-// entry fall back to the generic opaque-query schema. Keyed by "METHOD path".
-//
-// When you add/rename a list endpoint or its filters, add/update the entry here.
+// endpointAnnotations enriches data-heavy list/query routes with their real
+// filters + pagination. Keyed by "METHOD path"; unlisted routes stay generic.
 var endpointAnnotations = map[string]EndpointMeta{
 	// ---- HRIS ----
 	"GET /api/v1/hris/employees": {

@@ -11,9 +11,7 @@ type ToolSpec struct {
 	Method       string
 	PathTemplate string
 	PathParams   []string
-	// Meta carries curated query/pagination metadata so AI clients can discover
-	// filters and page through all data. Nil for endpoints without an annotation
-	// (they fall back to the generic opaque query schema).
+	// Meta enriches the query schema; nil endpoints keep the generic one.
 	Meta *EndpointMeta
 }
 
@@ -69,10 +67,8 @@ func (t ToolSpec) inputSchema() map[string]interface{} {
 	return schema
 }
 
-// querySchema renders the query object. With a curated EndpointMeta it exposes
-// each real filter as a typed, described property and surfaces page/per_page
-// (with defaults and caps) so the client knows to paginate through ALL results.
-// Without metadata it falls back to a free-form key/value object.
+// querySchema renders named filter + pagination properties when metadata exists,
+// else a free-form query object.
 func (t ToolSpec) querySchema() map[string]interface{} {
 	if t.Meta == nil || (len(t.Meta.Query) == 0 && !t.Meta.Paginated) {
 		return map[string]interface{}{
