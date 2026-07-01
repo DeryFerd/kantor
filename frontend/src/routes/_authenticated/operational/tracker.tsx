@@ -57,6 +57,7 @@ import {
   createTrackerDomain,
   deleteTrackerDomain,
   downloadTrackerExtension,
+  getTrackerExtensionStatus,
   getMyTrackerActivity,
   getTeamTrackerActivity,
   getTrackerConsent,
@@ -172,6 +173,10 @@ function OperationalTrackerPage() {
   const consentQuery = useQuery({
     queryKey: trackerKeys.consent(),
     queryFn: getTrackerConsent,
+  });
+  const extensionStatusQuery = useQuery({
+    queryKey: trackerKeys.extensionStatus(),
+    queryFn: getTrackerExtensionStatus,
   });
   const myActivityQuery = useQuery({
     queryKey: trackerKeys.myActivity(dateFrom, dateTo),
@@ -668,6 +673,21 @@ function OperationalTrackerPage() {
 
   return (
     <div className="space-y-6">
+      {extensionStatusQuery.data?.needs_update ? (
+        <div className="flex flex-col gap-3 rounded-md border border-warning/40 bg-warning/10 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-sm text-text-primary">
+            <p className="font-semibold">Versi extension baru tersedia (v{extensionStatusQuery.data.latest_version}).</p>
+            <p className="text-text-secondary">
+              Extension kamu (v{extensionStatusQuery.data.reported_version || "?"}) sudah usang. Download & pasang ulang
+              versi terbaru, lalu klik "Sinkronkan Browser" untuk menghubungkan kembali.
+            </p>
+          </div>
+          <Button type="button" onClick={() => void handleExtensionDownload()} disabled={isDownloadingExtension}>
+            <Download className="h-4 w-4" />
+            {isDownloadingExtension ? "Mengunduh..." : "Download versi terbaru"}
+          </Button>
+        </div>
+      ) : null}
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.08em] text-ops">Operasional</p>

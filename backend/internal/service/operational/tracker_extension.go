@@ -4,16 +4,102 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
 var ErrTrackerExtensionUnavailable = errors.New("tracker extension package is unavailable")
+
+// ExtensionStatus tells a client whether its installed extension is current.
+type ExtensionStatus struct {
+	LatestVersion   string `json:"latest_version"`
+	ReportedVersion string `json:"reported_version"`
+	NeedsUpdate     bool   `json:"needs_update"`
+}
+
+type extensionManifest struct {
+	Version string `json:"version"`
+}
+
+// LatestExtensionVersion reads the version from the bundled extension manifest —
+// i.e. the build the server hands out on download. Single source of truth: bump
+// the manifest and the "latest" everyone compares against moves with it.
+func (s *TrackerService) LatestExtensionVersion() (string, error) {
+	dir, err := resolveExtensionDir()
+	if err != nil {
+		return "", ErrTrackerExtensionUnavailable
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if err != nil {
+		return "", ErrTrackerExtensionUnavailable
+	}
+	var manifest extensionManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return "", ErrTrackerExtensionUnavailable
+	}
+	return strings.TrimSpace(manifest.Version), nil
+}
+
+// GetExtensionStatus compares the version last reported by the user's extension
+// against the bundled build so the dashboard can prompt a re-download.
+func (s *TrackerService) GetExtensionStatus(ctx context.Context, userID string) (ExtensionStatus, error) {
+	latest, err := s.LatestExtensionVersion()
+	if err != nil {
+		return ExtensionStatus{}, err
+	}
+	reported, err := s.repo.GetUserExtensionVersion(ctx, userID)
+	if err != nil {
+		return ExtensionStatus{}, err
+	}
+	return ExtensionStatus{
+		LatestVersion:   latest,
+		ReportedVersion: reported,
+		NeedsUpdate:     reported != "" && isExtensionVersionOlder(reported, latest),
+	}, nil
+}
+
+// isExtensionVersionOlder compares dotted numeric versions ("1.9" < "1.10").
+func isExtensionVersionOlder(current, latest string) bool {
+	a := parseVersionParts(current)
+	b := parseVersionParts(latest)
+	length := len(a)
+	if len(b) > length {
+		length = len(b)
+	}
+	for i := 0; i < length; i++ {
+		var left, right int
+		if i < len(a) {
+			left = a[i]
+		}
+		if i < len(b) {
+			right = b[i]
+		}
+		if left < right {
+			return true
+		}
+		if left > right {
+			return false
+		}
+	}
+	return false
+}
+
+func parseVersionParts(version string) []int {
+	fields := strings.Split(strings.TrimSpace(version), ".")
+	parts := make([]int, 0, len(fields))
+	for _, field := range fields {
+		value, _ := strconv.Atoi(strings.TrimSpace(field))
+		parts = append(parts, value)
+	}
+	return parts
+}
 
 func (s *TrackerService) BuildExtensionArchive(ctx context.Context) ([]byte, string, error) {
 	extensionDir, err := resolveExtensionDir()

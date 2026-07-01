@@ -945,6 +945,24 @@ func (r *TrackerRepository) EndStaleSessions(ctx context.Context, cutoff time.Ti
 	return tag.RowsAffected(), nil
 }
 
+// GetUserExtensionVersion returns the tracker extension version last reported by
+// the user (empty string if never reported).
+func (r *TrackerRepository) GetUserExtensionVersion(ctx context.Context, userID string) (string, error) {
+	ctx, cancel := repository.QueryContext(ctx)
+	defer cancel()
+
+	var version sql.NullString
+	if err := repository.DB(ctx, r.db).QueryRow(ctx, `
+		SELECT tracker_extension_version FROM users WHERE id = $1::uuid
+	`, userID).Scan(&version); err != nil {
+		return "", err
+	}
+	if version.Valid {
+		return version.String, nil
+	}
+	return "", nil
+}
+
 func (r *TrackerRepository) getSessionForUpdate(ctx context.Context, tx pgx.Tx, userID string, sessionID string) (model.ActivitySession, error) {
 	var session model.ActivitySession
 	err := tx.QueryRow(ctx, `
