@@ -1,4 +1,5 @@
 (function () {
+  const browserApi = globalThis.browser ?? globalThis.chrome;
   const WEB_SOURCE = "KANTOR_WEB_APP";
   const EXTENSION_SOURCE = "KANTOR_TRACKER_EXTENSION";
   const SUPPORTED_TYPES = new Set(["KANTOR_TRACKER_PING", "KANTOR_TRACKER_CONNECT", "KANTOR_TRACKER_ENABLE"]);
@@ -91,7 +92,7 @@
   }
 
   async function sendRuntimeMessage(type, payload) {
-    return chrome.runtime.sendMessage({ type, payload });
+    return browserApi.runtime.sendMessage({ type, payload });
   }
 
   function postResult(requestId, success, payload, error) {

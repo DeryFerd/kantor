@@ -1,3 +1,5 @@
+const browserApi = globalThis.browser ?? globalThis.chrome;
+
 const elements = {
   apiUrl: document.getElementById("api-url"),
   token: document.getElementById("token"),
@@ -102,7 +104,7 @@ function escapeHtml(value) {
 }
 
 function sendMessage(type, payload = {}) {
-  return chrome.runtime.sendMessage({ type, payload }).then((response) => {
+  return browserApi.runtime.sendMessage({ type, payload }).then((response) => {
     if (!response) {
       throw new Error("Background extension tidak merespons.");
     }
