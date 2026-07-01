@@ -234,7 +234,8 @@ async function sendHeartbeat(payload) {
 
 async function flushQueue() {
   const state = await loadState();
-  if (!state.queuedEntries.length) {
+  const pending = state.queuedEntries;
+  if (!pending.length) {
     return;
   }
 
@@ -244,14 +245,20 @@ async function flushQueue() {
   if (!sessionId) {
     return;
   }
-  const entries = state.queuedEntries.map((entry) => ({ ...entry, session_id: sessionId }));
+  const entries = pending.map((entry) => ({ ...entry, session_id: sessionId }));
 
   try {
     await authorizedRequest("/tracker/entries/batch", {
       method: "POST",
       body: JSON.stringify({ entries }),
     });
-    await updateState({ queuedEntries: [] });
+    // Drop only the entries we actually sent (the oldest `sentCount`) inside the
+    // lock, so beats queued while this batch was in flight are not lost.
+    const sentCount = entries.length;
+    await withStateLock(async () => {
+      const current = await loadState();
+      await saveState({ ...current, queuedEntries: current.queuedEntries.slice(sentCount) });
+    });
   } catch (error) {
     await updateState({
       lastError: error instanceof Error ? error.message : "Failed to sync queued entries",

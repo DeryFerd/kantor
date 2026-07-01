@@ -149,7 +149,7 @@ Backend:
 ```
 
 Privacy: tracking requires explicit user consent (opt-in). Data retention is configurable via `TRACKER_RETENTION_DAYS`.
-Access tokens are stored in `chrome.storage.session`, while persistent tracker settings remain in `chrome.storage.local`. Host permissions are limited to `http://*/*` and `https://*/*`.
+The extension authenticates with a long-lived, tracker-scoped Personal Access Token stored in `chrome.storage.local` (persists across browser restarts; revocable from the dashboard). Host permissions are limited to `http://*/*` and `https://*/*`.
 
 ## WhatsApp Integration
 
