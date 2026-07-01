@@ -20,6 +20,19 @@
 
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>KANTOR</title>
+
+    <!-- Apply the persisted theme before first paint to avoid a light/dark flash. -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem("kantor-theme");
+          var mode = stored ? (JSON.parse(stored).state || {}).mode : null;
+          if (mode !== "dark" && mode !== "light") mode = "light";
+          document.documentElement.classList.toggle("dark", mode === "dark");
+          document.documentElement.style.colorScheme = mode;
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body class="bg-background text-foreground">
     <div id="root"></div>
