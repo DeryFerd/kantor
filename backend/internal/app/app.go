@@ -565,6 +565,31 @@ func (a *App) startBackgroundJobs(authService *authservice.Service, subscription
 		}()
 	}
 
+	// runPerTenantTicker runs fn for every tenant on an interval (optionally once
+	// immediately at startup), passing the tick time as the job's "now".
+	runPerTenantTicker := func(name string, interval time.Duration, runImmediately bool, fn func(ctx context.Context, t tenant.Info, now time.Time) error) {
+		runBackground(name, func() {
+			tick := func(now time.Time) {
+				runPerTenant(name, func(tCtx context.Context, t tenant.Info) error {
+					return fn(tCtx, t, now)
+				})
+			}
+			if runImmediately {
+				tick(time.Now())
+			}
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case tickAt := <-ticker.C:
+					tick(tickAt)
+				}
+			}
+		})
+	}
+
 	runBackground("background_scheduler", func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -647,118 +672,39 @@ func (a *App) startBackgroundJobs(authService *authservice.Service, subscription
 		}
 	})
 
-	runBackground("domain_monitor_scheduler", func() {
-		// Tick every 5 min — DNS check interval is configurable per-domain
-		// (default 1 hour). 5 min is fine since ListDueDNSChecks filters.
-		ticker := time.NewTicker(5 * time.Minute)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case tickAt := <-ticker.C:
-				runPerTenant("domain_dns_run_due", func(tCtx context.Context, t tenant.Info) error {
-					return domainMonitorService.RunDueDNSChecks(tCtx, tickAt)
-				})
-			}
-		}
+	// DNS check interval is per-domain (default 1h); 5 min tick is fine because
+	// RunDueDNSChecks filters by what's due.
+	runPerTenantTicker("domain_dns_run_due", 5*time.Minute, false, func(tCtx context.Context, t tenant.Info, now time.Time) error {
+		return domainMonitorService.RunDueDNSChecks(tCtx, now)
 	})
 
-	runBackground("vps_monitor_scheduler", func() {
-		// Tick every 30s — finer than that wastes CPU since the smallest
-		// configurable check interval is 30s. ListDueChecks filters by
-		// last_check_at + interval so this loop is cheap when no checks
-		// are due.
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case tickAt := <-ticker.C:
-				runPerTenant("vps_monitor_run_due", func(tCtx context.Context, t tenant.Info) error {
-					return vpsMonitorService.RunDueChecks(tCtx, tickAt)
-				})
-			}
-		}
+	// 30s tick — the smallest configurable VPS check interval; RunDueChecks
+	// filters so the loop is cheap when nothing is due.
+	runPerTenantTicker("vps_monitor_run_due", 30*time.Second, false, func(tCtx context.Context, t tenant.Info, now time.Time) error {
+		return vpsMonitorService.RunDueChecks(tCtx, now)
 	})
 
-	runBackground("wa_scheduler", func() {
-		runPerTenant("wa_scheduler", func(tCtx context.Context, t tenant.Info) error {
-			return whatsappService.RunCronJobs(tCtx, time.Now())
-		})
-
-		ticker := time.NewTicker(time.Minute)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case tickAt := <-ticker.C:
-				runPerTenant("wa_scheduler", func(tCtx context.Context, t tenant.Info) error {
-					return whatsappService.RunCronJobs(tCtx, tickAt)
-				})
-			}
-		}
+	runPerTenantTicker("wa_scheduler", time.Minute, true, func(tCtx context.Context, t tenant.Info, now time.Time) error {
+		return whatsappService.RunCronJobs(tCtx, now)
 	})
 
-	runBackground("email_scheduler", func() {
-		runPerTenant("email_scheduler", func(tCtx context.Context, t tenant.Info) error {
-			return emailDeliveryService.RunCronJobs(tCtx, time.Now())
-		})
-
-		ticker := time.NewTicker(time.Minute)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case tickAt := <-ticker.C:
-				runPerTenant("email_scheduler", func(tCtx context.Context, t tenant.Info) error {
-					return emailDeliveryService.RunCronJobs(tCtx, tickAt)
-				})
-			}
-		}
+	runPerTenantTicker("email_scheduler", time.Minute, true, func(tCtx context.Context, t tenant.Info, now time.Time) error {
+		return emailDeliveryService.RunCronJobs(tCtx, now)
 	})
 
-	runBackground("reimbursement_reminder_scheduler", func() {
-		runPerTenant("reimbursement_reminder_scheduler", func(tCtx context.Context, t tenant.Info) error {
-			return reimbursementsService.RunReminderJobs(tCtx, time.Now())
-		})
-
-		ticker := time.NewTicker(time.Minute)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case tickAt := <-ticker.C:
-				runPerTenant("reimbursement_reminder_scheduler", func(tCtx context.Context, t tenant.Info) error {
-					return reimbursementsService.RunReminderJobs(tCtx, tickAt)
-				})
-			}
-		}
+	runPerTenantTicker("reimbursement_reminder_scheduler", time.Minute, true, func(tCtx context.Context, t tenant.Info, now time.Time) error {
+		return reimbursementsService.RunReminderJobs(tCtx, now)
 	})
 
-	runBackground("tracker_reminder_scheduler", func() {
-		ticker := time.NewTicker(time.Minute)
-		defer ticker.Stop()
+	runPerTenantTicker("tracker_reminder_scheduler", time.Minute, false, func(tCtx context.Context, t tenant.Info, now time.Time) error {
+		return trackerReminderService.RunReminderJobs(tCtx, now)
+	})
 
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case tickAt := <-ticker.C:
-				runPerTenant("tracker_reminder_scheduler", func(tCtx context.Context, t tenant.Info) error {
-					return trackerReminderService.RunReminderJobs(tCtx, tickAt)
-				})
-			}
-		}
+	// Close sessions orphaned by crashed/disconnected extensions so a later
+	// heartbeat cannot resurrect a stale session and back-fill the offline gap.
+	runPerTenantTicker("tracker_stale_sessions", 5*time.Minute, false, func(tCtx context.Context, t tenant.Info, now time.Time) error {
+		_, err := trackerService.EndStaleSessions(tCtx, now)
+		return err
 	})
 }
 

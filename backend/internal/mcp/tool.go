@@ -1,6 +1,9 @@
 package mcp
 
-import "net/http"
+import (
+	"fmt"
+	"net/http"
+)
 
 type ToolSpec struct {
 	Name         string
@@ -8,6 +11,25 @@ type ToolSpec struct {
 	Method       string
 	PathTemplate string
 	PathParams   []string
+	// Meta enriches the query schema; nil endpoints keep the generic one.
+	Meta *EndpointMeta
+}
+
+// QueryParam describes one real query-string parameter of an endpoint.
+type QueryParam struct {
+	Name        string
+	Type        string // "string", "integer", "boolean"
+	Description string
+	Enum        []string
+}
+
+// EndpointMeta is the curated annotation for an endpoint.
+type EndpointMeta struct {
+	Description    string
+	Query          []QueryParam
+	Paginated      bool
+	PerPageDefault int
+	PerPageMax     int // 0 = no enforced cap
 }
 
 func (t ToolSpec) hasBody() bool {
@@ -26,10 +48,7 @@ func (t ToolSpec) inputSchema() map[string]interface{} {
 		required = append(required, param)
 	}
 
-	properties["query"] = map[string]interface{}{
-		"type":        "object",
-		"description": "Optional query-string parameters as key/value pairs.",
-	}
+	properties["query"] = t.querySchema()
 
 	if t.hasBody() {
 		properties["body"] = map[string]interface{}{
@@ -48,10 +67,65 @@ func (t ToolSpec) inputSchema() map[string]interface{} {
 	return schema
 }
 
+// querySchema renders named filter + pagination properties when metadata exists,
+// else a free-form query object.
+func (t ToolSpec) querySchema() map[string]interface{} {
+	if t.Meta == nil || (len(t.Meta.Query) == 0 && !t.Meta.Paginated) {
+		return map[string]interface{}{
+			"type":        "object",
+			"description": "Optional query-string parameters as key/value pairs.",
+		}
+	}
+
+	props := map[string]interface{}{}
+	for _, param := range t.Meta.Query {
+		prop := map[string]interface{}{"type": param.Type}
+		if param.Description != "" {
+			prop["description"] = param.Description
+		}
+		if len(param.Enum) > 0 {
+			prop["enum"] = param.Enum
+		}
+		props[param.Name] = prop
+	}
+
+	if t.Meta.Paginated {
+		props["page"] = map[string]interface{}{
+			"type":        "integer",
+			"minimum":     1,
+			"description": "1-based page number (default 1).",
+		}
+		perPage := map[string]interface{}{"type": "integer", "minimum": 1}
+		desc := fmt.Sprintf("Items per page (default %d", t.Meta.PerPageDefault)
+		if t.Meta.PerPageMax > 0 {
+			desc += fmt.Sprintf(", max %d", t.Meta.PerPageMax)
+			perPage["maximum"] = t.Meta.PerPageMax
+		}
+		desc += "). The response is paginated — page through every page to retrieve all data."
+		perPage["description"] = desc
+		props["per_page"] = perPage
+	}
+
+	return map[string]interface{}{
+		"type":        "object",
+		"description": "Query-string filters and pagination.",
+		"properties":  props,
+	}
+}
+
 func (t ToolSpec) descriptor() map[string]interface{} {
+	description := t.Description
+	if t.Meta != nil && t.Meta.Description != "" {
+		description = t.Meta.Description + " (" + t.Method + " " + t.PathTemplate + ")"
+	}
 	return map[string]interface{}{
 		"name":        t.Name,
-		"description": t.Description,
+		"description": description,
 		"inputSchema": t.inputSchema(),
+		"annotations": map[string]interface{}{
+			"readOnlyHint":    t.Method == http.MethodGet,
+			"destructiveHint": t.Method == http.MethodDelete,
+			"idempotentHint":  t.Method == http.MethodGet || t.Method == http.MethodPut || t.Method == http.MethodDelete,
+		},
 	}
 }

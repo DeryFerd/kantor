@@ -90,5 +90,14 @@ arguments; pass query parameters under `query` (object) and request bodies under
 `body` (object). The API validates everything and returns the standard response
 envelope as the tool result; a non-2xx status sets `isError: true`.
 
+Data-heavy list/query tools carry an enriched `inputSchema`: their real filters
+are exposed as named, typed, described `query` properties (with enums where
+applicable), and paginated endpoints surface `page`/`per_page` with their
+defaults and caps — so a client can discover the available filters and page
+through **all** rows instead of taking only the default first page. Tools also
+expose MCP `annotations` (`readOnlyHint`/`destructiveHint`/`idempotentHint`)
+derived from the HTTP method. Endpoints without a curated annotation keep the
+generic free-form `query` object.
+
 Excluded from the surface: superadmin endpoints (toggle super admin, registration
 settings) and public auth flows (login, register, password reset).

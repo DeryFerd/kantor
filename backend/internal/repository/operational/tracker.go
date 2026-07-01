@@ -23,6 +23,18 @@ var (
 const (
 	trackerMinTimezoneOffsetMinutes = -720
 	trackerMaxTimezoneOffsetMinutes = 840
+
+	// trackerMaxHeartbeatGapSeconds caps how much active time a single heartbeat
+	// may credit. The extension beats every ~30s; beyond a few intervals the gap
+	// is not trustworthy continuous activity. Capping the per-heartbeat delta is
+	// what stops a long offline gap from being back-filled as active time.
+	trackerMaxHeartbeatGapSeconds = 120
+
+	// trackerStaleSessionGapSeconds is the gap beyond which the active session is
+	// considered abandoned (extension crashed / browser closed). Instead of
+	// crediting the whole offline gap, we close the old session at its last-seen
+	// time and start a fresh one — no back-fill.
+	trackerStaleSessionGapSeconds = 15 * 60
 )
 
 type TrackerStartSessionParams struct {
@@ -33,13 +45,17 @@ type TrackerStartSessionParams struct {
 }
 
 type TrackerHeartbeatParams struct {
-	SessionID             string
-	UserID                string
-	URL                   string
-	Domain                string
-	PageTitle             *string
-	IsIdle                bool
-	Timestamp             time.Time
+	SessionID string
+	UserID    string
+	URL       string
+	Domain    string
+	PageTitle *string
+	IsIdle    bool
+	Timestamp time.Time
+	// Now is the server's authoritative receive time. The client-supplied
+	// Timestamp is clamped to [session.start, Now] so future-dated or skewed
+	// client clocks cannot inflate or corrupt recorded time.
+	Now                   time.Time
 	TimezoneOffsetMinutes int
 	TimezoneName          *string
 	ExtensionVersion      *string
@@ -171,6 +187,12 @@ func (r *TrackerRepository) StartSession(ctx context.Context, userID string, par
 		}
 	}()
 
+	// Serialize session creation per user so two concurrent StartSession calls
+	// cannot both miss the active-session check and insert duplicates.
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, userID); err != nil {
+		return model.ActivitySession{}, err
+	}
+
 	userContext, timezoneOffsetMinutes, timezoneName, err := r.resolveEffectiveTrackerOffset(ctx, tx, userID, startedAt, params.TimezoneName, params.TimezoneOffsetMinutes)
 	if err != nil {
 		return model.ActivitySession{}, err
@@ -228,9 +250,13 @@ func (r *TrackerRepository) EndSession(ctx context.Context, userID string, sessi
 	defer cancel()
 
 	var session model.ActivitySession
+	// Clamp the client-supplied end time to [start_time, now] so a user cannot
+	// write an arbitrary end_time (past start or far in the future).
 	err := repository.DB(ctx, r.db).QueryRow(ctx, `
 		UPDATE activity_sessions
-		SET end_time = $3, is_active = FALSE, updated_at = $3
+		SET end_time = LEAST(GREATEST($3, start_time), NOW()),
+			is_active = FALSE,
+			updated_at = LEAST(GREATEST($3, start_time), NOW())
 		WHERE id = $1::uuid AND user_id = $2::uuid
 		RETURNING id::text, user_id::text, date, timezone_offset_minutes, start_time, end_time, total_active_seconds, total_idle_seconds, is_active, created_at, updated_at
 	`, sessionID, userID, endedAt.UTC()).Scan(
@@ -269,6 +295,13 @@ func (r *TrackerRepository) RecordHeartbeat(ctx context.Context, params TrackerH
 		}
 	}()
 
+	// Serialize per-user session creation with StartSession so the stale/rotation
+	// recreate path below cannot race a concurrent StartSession into a duplicate
+	// active session (which the one-active unique index would reject with a 500).
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, params.UserID); err != nil {
+		return model.ActivityEntry{}, model.ActivitySession{}, err
+	}
+
 	session, err := r.getSessionForUpdate(ctx, tx, params.UserID, params.SessionID)
 	if err != nil {
 		return model.ActivityEntry{}, model.ActivitySession{}, err
@@ -280,9 +313,26 @@ func (r *TrackerRepository) RecordHeartbeat(ctx context.Context, params TrackerH
 
 	params.Domain = strings.ToLower(strings.TrimSpace(params.Domain))
 
+	now := params.Now.UTC()
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+
+	// Clamp the client-supplied timestamp into a trustworthy window:
+	//   - never in the future (a future value poisons updated_at and silently
+	//     zeroes all later activity, and inflates active time),
+	//   - never before the session start,
+	//   - never before the last heartbeat (monotonic: a stale/replayed beat must
+	//     not reopen an already-counted interval and double-count).
 	timestamp := params.Timestamp.UTC()
+	if timestamp.After(now) {
+		timestamp = now
+	}
 	if timestamp.Before(session.StartTime) {
 		timestamp = session.StartTime
+	}
+	if timestamp.Before(session.UpdatedAt) {
+		timestamp = session.UpdatedAt
 	}
 
 	userContext, timezoneOffsetMinutes, timezoneName, err := r.resolveEffectiveTrackerOffset(ctx, tx, params.UserID, timestamp, params.TimezoneName, params.TimezoneOffsetMinutes)
@@ -296,6 +346,24 @@ func (r *TrackerRepository) RecordHeartbeat(ctx context.Context, params TrackerH
 		}
 	}
 
+	// Abandoned session: a gap larger than the stale threshold means the
+	// extension was offline (crash/close/sleep). Close the old session at its
+	// last-seen time and start a fresh one rather than back-filling the whole
+	// offline gap as active time (the 22h/100% exploit).
+	if int(timestamp.Sub(session.UpdatedAt).Seconds()) > trackerStaleSessionGapSeconds {
+		if _, err = r.closeSessionAt(ctx, tx, session.ID, session.UserID, session.UpdatedAt); err != nil {
+			return model.ActivityEntry{}, model.ActivitySession{}, err
+		}
+		freshSession, createErr := r.createSession(ctx, tx, session.UserID, timestamp, session.TimezoneOffsetMinutes)
+		if createErr != nil {
+			return model.ActivityEntry{}, model.ActivitySession{}, createErr
+		}
+		if err = tx.Commit(ctx); err != nil {
+			return model.ActivityEntry{}, model.ActivitySession{}, err
+		}
+		return model.ActivityEntry{}, freshSession, nil
+	}
+
 	category := "uncategorized"
 	productive := false
 	if !params.IsIdle {
@@ -306,16 +374,13 @@ func (r *TrackerRepository) RecordHeartbeat(ctx context.Context, params TrackerH
 	}
 
 	var entry model.ActivityEntry
-	if shouldRotateTrackerSession(session, timestamp, params.TimezoneOffsetMinutes) {
+	if shouldRotateTrackerSession(session, timestamp) {
 		entry, session, err = r.recordHeartbeatAcrossSessionBoundary(ctx, tx, session, params, timestamp, category, productive)
 		if err != nil {
 			return model.ActivityEntry{}, model.ActivitySession{}, err
 		}
 	} else {
-		deltaSeconds := int(timestamp.Sub(session.UpdatedAt).Seconds())
-		if deltaSeconds < 0 {
-			deltaSeconds = 0
-		}
+		deltaSeconds := cappedHeartbeatDelta(session.UpdatedAt, timestamp)
 
 		if !params.IsIdle && deltaSeconds > 0 {
 			params.SessionID = session.ID
@@ -844,6 +909,42 @@ func (r *TrackerRepository) PurgeOldSessions(ctx context.Context, cutoff time.Ti
 	return tag.RowsAffected(), nil
 }
 
+// EndActiveSessions closes every still-active session for a user at its last-seen
+// time. Used when consent is revoked so no further time is credited and a later
+// re-grant cannot resume a stale session.
+func (r *TrackerRepository) EndActiveSessions(ctx context.Context, userID string) (int64, error) {
+	ctx, cancel := repository.QueryContext(ctx)
+	defer cancel()
+
+	tag, err := repository.DB(ctx, r.db).Exec(ctx, `
+		UPDATE activity_sessions
+		SET is_active = FALSE, end_time = updated_at
+		WHERE user_id = $1::uuid AND is_active = TRUE
+	`, userID)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+// EndStaleSessions closes active sessions whose last heartbeat predates cutoff —
+// orphaned by crashed/disconnected clients. Closing at updated_at adds no
+// phantom active time and stops StartSession from resurrecting a stale session.
+func (r *TrackerRepository) EndStaleSessions(ctx context.Context, cutoff time.Time) (int64, error) {
+	ctx, cancel := repository.QueryContext(ctx)
+	defer cancel()
+
+	tag, err := repository.DB(ctx, r.db).Exec(ctx, `
+		UPDATE activity_sessions
+		SET is_active = FALSE, end_time = updated_at
+		WHERE is_active = TRUE AND updated_at < $1
+	`, cutoff.UTC())
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 func (r *TrackerRepository) getSessionForUpdate(ctx context.Context, tx pgx.Tx, userID string, sessionID string) (model.ActivitySession, error) {
 	var session model.ActivitySession
 	err := tx.QueryRow(ctx, `
@@ -920,16 +1021,13 @@ func (r *TrackerRepository) closeSessionAt(ctx context.Context, tx pgx.Tx, sessi
 }
 
 func (r *TrackerRepository) recordHeartbeatAcrossSessionBoundary(ctx context.Context, tx pgx.Tx, session model.ActivitySession, params TrackerHeartbeatParams, timestamp time.Time, category string, isProductive bool) (model.ActivityEntry, model.ActivitySession, error) {
-	boundary := trackerSessionBoundaryUTC(session, timestamp, params.TimezoneOffsetMinutes)
+	boundary := trackerSessionBoundaryUTC(session, timestamp, session.TimezoneOffsetMinutes)
 	if boundary.Before(session.UpdatedAt) || boundary.After(timestamp) {
 		boundary = timestamp
 	}
 
 	var entry model.ActivityEntry
-	oldDeltaSeconds := int(boundary.Sub(session.UpdatedAt).Seconds())
-	if oldDeltaSeconds < 0 {
-		oldDeltaSeconds = 0
-	}
+	oldDeltaSeconds := cappedHeartbeatDelta(session.UpdatedAt, boundary)
 	if !params.IsIdle && oldDeltaSeconds > 0 {
 		oldParams := params
 		oldParams.SessionID = session.ID
@@ -949,15 +1047,12 @@ func (r *TrackerRepository) recordHeartbeatAcrossSessionBoundary(ctx context.Con
 		return model.ActivityEntry{}, model.ActivitySession{}, err
 	}
 
-	nextSession, err := r.createSession(ctx, tx, updatedSession.UserID, boundary, params.TimezoneOffsetMinutes)
+	nextSession, err := r.createSession(ctx, tx, updatedSession.UserID, boundary, session.TimezoneOffsetMinutes)
 	if err != nil {
 		return model.ActivityEntry{}, model.ActivitySession{}, err
 	}
 
-	remainingDeltaSeconds := int(timestamp.Sub(nextSession.UpdatedAt).Seconds())
-	if remainingDeltaSeconds < 0 {
-		remainingDeltaSeconds = 0
-	}
+	remainingDeltaSeconds := cappedHeartbeatDelta(nextSession.UpdatedAt, timestamp)
 	if !params.IsIdle && remainingDeltaSeconds > 0 {
 		nextParams := params
 		nextParams.SessionID = nextSession.ID
@@ -1125,11 +1220,26 @@ func trackerSessionBoundaryUTC(session model.ActivitySession, timestamp time.Tim
 	return currentLocalDate.Add(time.Duration(timezoneOffsetMinutes) * time.Minute)
 }
 
-func shouldRotateTrackerSession(session model.ActivitySession, timestamp time.Time, timezoneOffsetMinutes int) bool {
-	if session.TimezoneOffsetMinutes != timezoneOffsetMinutes {
-		return true
+func shouldRotateTrackerSession(session model.ActivitySession, timestamp time.Time) bool {
+	// Timezone is pinned at session start: rotate only when the local calendar
+	// date advances, computed with the session's own offset. This stops a
+	// per-heartbeat timezone change from forcing rotations or redistributing
+	// activity across date buckets.
+	return session.Date.Format("2006-01-02") != trackerLocalDateString(timestamp, session.TimezoneOffsetMinutes)
+}
+
+// cappedHeartbeatDelta is the active/idle seconds a single heartbeat may credit:
+// the gap since the last heartbeat, floored at 0 and capped at
+// trackerMaxHeartbeatGapSeconds so a missed-beat gap is never back-filled.
+func cappedHeartbeatDelta(lastSeen time.Time, timestamp time.Time) int {
+	delta := int(timestamp.Sub(lastSeen).Seconds())
+	if delta < 0 {
+		return 0
 	}
-	return session.Date.Format("2006-01-02") != trackerLocalDateString(timestamp, timezoneOffsetMinutes)
+	if delta > trackerMaxHeartbeatGapSeconds {
+		return trackerMaxHeartbeatGapSeconds
+	}
+	return delta
 }
 func (r *TrackerRepository) resolveDomainCategory(ctx context.Context, tx pgx.Tx, domain string) (string, bool, error) {
 	var (
@@ -1232,8 +1342,8 @@ func (r *TrackerRepository) updateSessionAfterHeartbeat(ctx context.Context, tx 
 		SET
 			total_active_seconds = total_active_seconds + $3,
 			total_idle_seconds = total_idle_seconds + $4,
-			end_time = $5,
-			updated_at = $5
+			end_time = GREATEST(end_time, $5),
+			updated_at = GREATEST(updated_at, $5)
 		WHERE id = $1::uuid AND user_id = $2::uuid
 		RETURNING id::text, user_id::text, date, timezone_offset_minutes, start_time, end_time, total_active_seconds, total_idle_seconds, is_active, created_at, updated_at
 	`
@@ -1548,4 +1658,3 @@ func nullStringPointer(value sql.NullString) *string {
 	result := strings.TrimSpace(value.String)
 	return &result
 }
-

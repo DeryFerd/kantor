@@ -35,6 +35,8 @@ type trackerRepository interface {
 	BulkClassifyObservedDomains(ctx context.Context, domains []string, isProductive bool, category *string) (model.BulkClassifyDomainsResult, error)
 	DeleteDomainCategory(ctx context.Context, domainID string) error
 	PurgeOldSessions(ctx context.Context, cutoff time.Time) (int64, error)
+	EndActiveSessions(ctx context.Context, userID string) (int64, error)
+	EndStaleSessions(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
 type TrackerService struct {
@@ -70,7 +72,16 @@ func (s *TrackerService) GiveConsent(ctx context.Context, userID string, ipAddre
 }
 
 func (s *TrackerService) RevokeConsent(ctx context.Context, userID string, ipAddress string, now time.Time) (model.ActivityConsent, error) {
-	return s.repo.UpsertConsent(ctx, userID, false, ipAddress, now)
+	consent, err := s.repo.UpsertConsent(ctx, userID, false, ipAddress, now)
+	if err != nil {
+		return model.ActivityConsent{}, err
+	}
+	// Close any open sessions so no further time is credited after consent is
+	// withdrawn and a later re-grant cannot resume a stale (back-fillable) one.
+	if _, err := s.repo.EndActiveSessions(ctx, userID); err != nil {
+		return model.ActivityConsent{}, err
+	}
+	return consent, nil
 }
 
 func (s *TrackerService) StartSession(ctx context.Context, userID string, request operationaldto.TrackerStartSessionRequest, now time.Time) (model.ActivitySession, error) {
@@ -81,6 +92,11 @@ func (s *TrackerService) StartSession(ctx context.Context, userID string, reques
 	startedAt := now
 	if request.Timestamp != nil {
 		startedAt = *request.Timestamp
+	}
+	// Never let a client start a session dated in the future (skewed clock or
+	// abuse) — it would bucket activity into a future date.
+	if startedAt.After(now) {
+		startedAt = now
 	}
 
 	return s.repo.StartSession(ctx, userID, operationalrepo.TrackerStartSessionParams{
@@ -99,7 +115,7 @@ func (s *TrackerService) EndSession(ctx context.Context, userID string, sessionI
 	return session, err
 }
 
-func (s *TrackerService) RecordHeartbeat(ctx context.Context, userID string, request operationaldto.TrackerHeartbeatRequest) (model.ActivityEntry, model.ActivitySession, error) {
+func (s *TrackerService) RecordHeartbeat(ctx context.Context, userID string, request operationaldto.TrackerHeartbeatRequest, now time.Time) (model.ActivityEntry, model.ActivitySession, error) {
 	if err := s.requireConsent(ctx, userID); err != nil {
 		return model.ActivityEntry{}, model.ActivitySession{}, err
 	}
@@ -112,6 +128,7 @@ func (s *TrackerService) RecordHeartbeat(ctx context.Context, userID string, req
 		PageTitle:             request.PageTitle,
 		IsIdle:                request.IsIdle,
 		Timestamp:             request.Timestamp,
+		Now:                   now,
 		TimezoneOffsetMinutes: request.TimezoneOffsetMinutes,
 		TimezoneName:          request.TimezoneName,
 		ExtensionVersion:      request.ExtensionVersion,
@@ -122,7 +139,7 @@ func (s *TrackerService) RecordHeartbeat(ctx context.Context, userID string, req
 	return entry, session, err
 }
 
-func (s *TrackerService) RecordBatch(ctx context.Context, userID string, request operationaldto.TrackerBatchEntriesRequest) (TrackerBatchResult, error) {
+func (s *TrackerService) RecordBatch(ctx context.Context, userID string, request operationaldto.TrackerBatchEntriesRequest, now time.Time) (TrackerBatchResult, error) {
 	if err := s.requireConsent(ctx, userID); err != nil {
 		return TrackerBatchResult{}, err
 	}
@@ -131,10 +148,21 @@ func (s *TrackerService) RecordBatch(ctx context.Context, userID string, request
 	sortHeartbeats(entries)
 
 	result := TrackerBatchResult{}
+	var currentSessionID string
 	for _, entry := range entries {
-		if _, _, err := s.RecordHeartbeat(ctx, userID, entry); err != nil {
+		// If an earlier entry's session was rotated/recreated server-side (e.g. a
+		// stale-gap close), route the remaining replayed beats to the new session
+		// instead of the now-closed original so post-gap activity is not dropped.
+		if currentSessionID != "" {
+			entry.SessionID = currentSessionID
+		}
+		_, session, err := s.RecordHeartbeat(ctx, userID, entry, now)
+		if err != nil {
 			result.Skipped++
 			continue
+		}
+		if session.ID != "" {
+			currentSessionID = session.ID
 		}
 		result.Processed++
 	}
@@ -203,8 +231,21 @@ func (s *TrackerService) DeleteDomainCategory(ctx context.Context, domainID stri
 }
 
 func (s *TrackerService) PurgeOldData(ctx context.Context, now time.Time) (int64, error) {
-	cutoff := now.AddDate(0, 0, -s.retentionDays)
+	// Sessions store a LOCAL date but the cutoff derives from UTC now; keep one
+	// extra day of slack so a timezone offset can never purge data still inside
+	// the retention window.
+	cutoff := now.AddDate(0, 0, -(s.retentionDays + 1))
 	return s.repo.PurgeOldSessions(ctx, cutoff)
+}
+
+// trackerStaleSessionThreshold is how long a session may go without a heartbeat
+// before the sweeper closes it as abandoned (matches the in-request stale gap).
+const trackerStaleSessionThreshold = 15 * time.Minute
+
+// EndStaleSessions closes sessions orphaned by crashed/disconnected clients so a
+// later heartbeat or StartSession cannot resurrect them and back-fill the gap.
+func (s *TrackerService) EndStaleSessions(ctx context.Context, now time.Time) (int64, error) {
+	return s.repo.EndStaleSessions(ctx, now.Add(-trackerStaleSessionThreshold))
 }
 
 func (s *TrackerService) requireConsent(ctx context.Context, userID string) error {

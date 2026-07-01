@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -73,7 +75,7 @@ func (t ToolSpec) buildRequest(ctx context.Context, baseURL string, args map[str
 			return nil, fmt.Errorf("query must be an object")
 		}
 		for key, value := range parsed {
-			query.Set(key, fmt.Sprintf("%v", value))
+			addQueryValue(query, key, value)
 		}
 	}
 
@@ -106,4 +108,31 @@ func (t ToolSpec) buildRequest(ctx context.Context, baseURL string, args map[str
 	}
 	req.Header.Set("Accept", "application/json")
 	return req, nil
+}
+
+// addQueryValue encodes a JSON query value into url.Values. JSON numbers decode
+// as float64, so integers must render without scientific notation/decimals, and
+// arrays become repeated keys (?k=a&k=b). fmt.Sprintf("%v") mangled all of these
+// (e.g. a large per_page -> "1e+06", an array -> "[a b]"), corrupting filters.
+func addQueryValue(query url.Values, key string, value interface{}) {
+	switch v := value.(type) {
+	case nil:
+		return
+	case string:
+		query.Add(key, v)
+	case bool:
+		query.Add(key, strconv.FormatBool(v))
+	case float64:
+		if !math.IsInf(v, 0) && !math.IsNaN(v) && v == math.Trunc(v) {
+			query.Add(key, strconv.FormatInt(int64(v), 10))
+		} else {
+			query.Add(key, strconv.FormatFloat(v, 'f', -1, 64))
+		}
+	case []interface{}:
+		for _, item := range v {
+			addQueryValue(query, key, item)
+		}
+	default:
+		query.Add(key, fmt.Sprintf("%v", v))
+	}
 }

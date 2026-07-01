@@ -165,7 +165,7 @@ func (h *TrackerHandler) heartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entry, session, err := h.service.RecordHeartbeat(r.Context(), principal.UserID, request)
+	entry, session, err := h.service.RecordHeartbeat(r.Context(), principal.UserID, request, time.Now())
 	if err != nil {
 		h.writeError(r.Context(), w, err)
 		return
@@ -189,7 +189,7 @@ func (h *TrackerHandler) batchEntries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.service.RecordBatch(r.Context(), principal.UserID, request)
+	result, err := h.service.RecordBatch(r.Context(), principal.UserID, request, time.Now())
 	if err != nil {
 		h.writeError(r.Context(), w, err)
 		return
@@ -411,4 +411,3 @@ func parseDateRange(w http.ResponseWriter, r *http.Request) (time.Time, time.Tim
 	}
 	return dateFrom, dateTo, true
 }
-
