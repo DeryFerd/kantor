@@ -5,6 +5,19 @@
 @tailwind utilities;
 
 @layer base {
+  /* Suppress transitions while the theme flips so every element switches at
+     once. Without this, elements using transition-all animate the color change
+     and the toggle looks staggered. ThemeProvider adds this class for one frame
+     around the mode change. */
+  .theme-no-transitions,
+  .theme-no-transitions *,
+  .theme-no-transitions *::before,
+  .theme-no-transitions *::after {
+    transition: none !important;
+  }
+}
+
+@layer base {
   :root {
     --background: 210 33% 98%; /* #FAFBFC */
     --foreground: 218 54% 19%; /* #172B4D */
