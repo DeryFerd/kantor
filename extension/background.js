@@ -9,7 +9,7 @@ const DEFAULT_STATE = {
   sessionId: "",
   consented: false,
   paused: false,
-  idleTimeoutSeconds: 300,
+  idleTimeoutSeconds: 7200,
   excludedDomains: [],
   queuedEntries: [],
   currentTab: null,
@@ -506,10 +506,12 @@ function normalizeExcludedDomains(items) {
   );
 }
 
+// Default idle threshold is 2 hours: a user is only counted idle after 2h with
+// no keyboard/mouse input. Configurable per user in the options page (min 60s).
 function normalizeIdleTimeout(value) {
-  const parsed = Number(value || 300);
+  const parsed = Number(value || 7200);
   if (!Number.isFinite(parsed) || parsed < 60) {
-    return 300;
+    return 7200;
   }
   return Math.round(parsed);
 }
