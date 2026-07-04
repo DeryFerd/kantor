@@ -1,3 +1,5 @@
+const browserApi = globalThis.browser ?? globalThis.chrome;
+
 const elements = {
   apiUrl: document.getElementById("api-url"),
   token: document.getElementById("token"),
@@ -43,7 +45,7 @@ function bindEvents() {
       new Set([...current.excludedDomains, elements.domainInput.value.trim().toLowerCase()].filter(Boolean)),
     );
     await sendMessage("tracker:set-options", {
-      idleTimeoutSeconds: Number(elements.idleTimeout.value || 300),
+      idleTimeoutSeconds: Number(elements.idleTimeout.value || 7200),
       excludedDomains: nextDomains,
     });
     elements.domainInput.value = "";
@@ -54,7 +56,7 @@ function bindEvents() {
 async function persistBehaviourSettings() {
   const current = await sendMessage("tracker:get-state");
   await sendMessage("tracker:set-options", {
-    idleTimeoutSeconds: Number(elements.idleTimeout.value || 300),
+    idleTimeoutSeconds: Number(elements.idleTimeout.value || 7200),
     excludedDomains: current.excludedDomains,
   });
 }
@@ -64,7 +66,7 @@ async function renderState(message = "") {
 
   elements.apiUrl.value = state.apiBaseUrl || "";
   elements.token.value = state.token || "";
-  elements.idleTimeout.value = String(state.idleTimeoutSeconds || 300);
+  elements.idleTimeout.value = String(state.idleTimeoutSeconds || 7200);
   elements.consentStatus.textContent = state.consented
     ? "Consent aktif. Extension boleh mengirim heartbeat ke platform."
     : "Consent belum aktif. Tracking tidak akan berjalan sebelum Anda menyetujuinya.";
@@ -84,7 +86,7 @@ async function renderState(message = "") {
     button.addEventListener("click", async () => {
       const nextDomains = (state.excludedDomains || []).filter((item) => item !== button.dataset.domain);
       await sendMessage("tracker:set-options", {
-        idleTimeoutSeconds: Number(elements.idleTimeout.value || 300),
+        idleTimeoutSeconds: Number(elements.idleTimeout.value || 7200),
         excludedDomains: nextDomains,
       });
       await renderState("Domain berhasil dihapus dari exclusion list.");
@@ -102,7 +104,7 @@ function escapeHtml(value) {
 }
 
 function sendMessage(type, payload = {}) {
-  return chrome.runtime.sendMessage({ type, payload }).then((response) => {
+  return browserApi.runtime.sendMessage({ type, payload }).then((response) => {
     if (!response) {
       throw new Error("Background extension tidak merespons.");
     }

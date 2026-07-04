@@ -42,6 +42,7 @@ func (h *TrackerHandler) RegisterRoutes(router chi.Router) {
 
 	router.With(platformmiddleware.RequirePermission("operational:tracker:view")).Get("/my-activity", h.getMyActivity)
 	router.With(platformmiddleware.RequirePermission("operational:tracker:view")).Get("/extension/download", h.downloadExtension)
+	router.With(platformmiddleware.RequirePermission("operational:tracker:view")).Get("/extension/status", h.getExtensionStatus)
 	router.With(platformmiddleware.RequirePermission("operational:tracker:view_team")).Get("/team-activity", h.getTeamActivity)
 	router.With(platformmiddleware.RequirePermission("operational:tracker:view_team")).Get("/activity/{userID}", h.getUserActivity)
 	router.With(platformmiddleware.RequirePermission("operational:tracker:view_team")).Get("/summary", h.getSummary)
@@ -232,6 +233,21 @@ func (h *TrackerHandler) downloadExtension(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(archiveBytes)
+}
+
+func (h *TrackerHandler) getExtensionStatus(w http.ResponseWriter, r *http.Request) {
+	principal, ok := platformmiddleware.PrincipalFromContext(r.Context())
+	if !ok {
+		response.WriteError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Authenticated principal is missing", nil)
+		return
+	}
+
+	status, err := h.service.GetExtensionStatus(r.Context(), principal.UserID)
+	if err != nil {
+		response.WriteInternalError(r.Context(), w, err, "Failed to load extension status")
+		return
+	}
+	response.WriteJSON(w, http.StatusOK, status, nil)
 }
 
 func (h *TrackerHandler) getTeamActivity(w http.ResponseWriter, r *http.Request) {

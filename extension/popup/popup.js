@@ -1,4 +1,7 @@
+const browserApi = globalThis.browser ?? globalThis.chrome;
+
 const elements = {
+  updateBanner: document.getElementById("update-banner"),
   setupState: document.getElementById("setup-state"),
   consentState: document.getElementById("consent-state"),
   trackerState: document.getElementById("tracker-state"),
@@ -94,7 +97,7 @@ function bindEvents() {
   });
 
   elements.openSettingsButton.addEventListener("click", () => {
-    chrome.runtime.openOptionsPage();
+    browserApi.runtime.openOptionsPage();
   });
 }
 
@@ -125,6 +128,15 @@ function render(state) {
     showError(state.lastError);
   } else {
     elements.errorBanner.classList.add("hidden");
+  }
+
+  if (elements.updateBanner) {
+    if (state.updateAvailable) {
+      elements.updateBanner.textContent = `Versi baru extension (${state.latestVersion}) tersedia. Download ulang dari dashboard KANTOR.`;
+      elements.updateBanner.classList.remove("hidden");
+    } else {
+      elements.updateBanner.classList.add("hidden");
+    }
   }
 
   renderTrackerState(state);
@@ -189,7 +201,7 @@ function showError(message) {
 }
 
 function sendMessage(type, payload = {}) {
-  return chrome.runtime.sendMessage({ type, payload }).then((response) => {
+  return browserApi.runtime.sendMessage({ type, payload }).then((response) => {
     if (!response) {
       throw new Error("Extension background did not respond");
     }

@@ -12,7 +12,7 @@ Extension ini tidak khusus untuk localhost. Flow utamanya adalah menerima konfig
 - Offline queue + batch sync saat koneksi kembali
 - Popup status tracker yang fokus pada status, waktu aktif, dan domain aktif
 - Options page untuk fallback manual, idle timeout, dan excluded domains
-- Access token disimpan di `chrome.storage.session`, bukan storage persisten
+- Personal Access Token (PAT) tracker-scoped disimpan di `chrome.storage.local` agar tetap ada setelah browser restart; token bisa di-revoke kapan saja dari dashboard
 - Host permission dibatasi ke `http://*/*` dan `https://*/*`
 
 ## Cara Pasang untuk User
@@ -56,7 +56,7 @@ Gunakan ini hanya jika auto-connect dari dashboard tidak bisa dipakai.
 ## Cara Kerja Singkat
 
 1. Dashboard web mengirim konfigurasi ke extension.
-2. Extension menyimpan `apiBaseUrl` di `chrome.storage.local`, sedangkan access token disimpan di `chrome.storage.session`.
+2. Extension menyimpan `apiBaseUrl` dan PAT tracker-scoped di `chrome.storage.local` (persisten lintas restart).
 3. Extension memulai session tracker.
 4. Setiap 30 detik extension mengirim heartbeat berisi URL aktif, domain, judul halaman, dan status idle.
 5. Backend menyimpan data ke `activity_sessions` dan `activity_entries`.
@@ -96,10 +96,9 @@ Catatan:
 
 ## Catatan Auth
 
-- extension menyimpan access token di `chrome.storage.session`
-- refresh token tidak disimpan langsung oleh extension
-- saat access token expired, extension akan mencoba `POST /api/v1/auth/refresh` dengan cookie browser yang masih aktif
-- jika refresh gagal, user perlu menghubungkan ulang dari dashboard atau melakukan setup manual lagi
+- extension memakai Personal Access Token (PAT) tracker-scoped yang berumur panjang, disimpan di `chrome.storage.local`
+- PAT hanya bisa mengakses endpoint tracker (`operational:tracker:*`) dan bisa di-revoke kapan saja dari dashboard
+- tidak ada alur refresh; jika PAT di-revoke/invalid (401), extension meminta user menghubungkan ulang dari dashboard
 
 ## Catatan Deployment dan Development
 

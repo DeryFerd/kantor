@@ -37,6 +37,7 @@ type trackerRepository interface {
 	PurgeOldSessions(ctx context.Context, cutoff time.Time) (int64, error)
 	EndActiveSessions(ctx context.Context, userID string) (int64, error)
 	EndStaleSessions(ctx context.Context, cutoff time.Time) (int64, error)
+	GetUserExtensionVersion(ctx context.Context, userID string) (string, error)
 }
 
 type TrackerService struct {

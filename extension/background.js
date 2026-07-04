@@ -1,3 +1,7 @@
+// Cross-browser: Firefox/Safari expose `browser` (promise-based); Chrome exposes
+// `chrome` (promise-based on MV3 for the APIs used here). One namespace for all.
+const browserApi = globalThis.browser ?? globalThis.chrome;
+
 const DEFAULT_STATE = {
   apiBaseUrl: "",
   dashboardUrl: "",
@@ -5,7 +9,7 @@ const DEFAULT_STATE = {
   sessionId: "",
   consented: false,
   paused: false,
-  idleTimeoutSeconds: 300,
+  idleTimeoutSeconds: 7200,
   excludedDomains: [],
   queuedEntries: [],
   currentTab: null,
@@ -13,44 +17,49 @@ const DEFAULT_STATE = {
   lastSummary: null,
   lastHeartbeatAt: null,
   lastError: "",
+  updateAvailable: false,
+  latestVersion: "",
 };
 
 const HEARTBEAT_ALARM = "kantor-heartbeat";
 const HEARTBEAT_INTERVAL_MINUTES = 0.5;
+// Offline queue cap. Sized to hold a full workday of 30s heartbeats (~2880/day)
+// with headroom, so a long offline stretch does not silently drop early activity.
+const MAX_QUEUED_ENTRIES = 5000;
 
-chrome.runtime.onInstalled.addListener(() => {
+browserApi.runtime.onInstalled.addListener(() => {
   void initializeState();
 });
 
-chrome.runtime.onStartup.addListener(() => {
+browserApi.runtime.onStartup.addListener(() => {
   void initializeState();
 });
 
-chrome.runtime.onSuspend.addListener(() => {
+browserApi.runtime.onSuspend?.addListener(() => {
   void bestEffortEndSession();
 });
 
-chrome.alarms.onAlarm.addListener((alarm) => {
+browserApi.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === HEARTBEAT_ALARM) {
     void handleHeartbeatTick();
   }
 });
 
-chrome.tabs.onActivated.addListener(() => {
+browserApi.tabs.onActivated.addListener(() => {
   void updateCurrentTabSnapshot();
 });
 
-chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
+browserApi.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
   if (changeInfo.status === "complete" && tab.active) {
     void updateCurrentTabSnapshot();
   }
 });
 
-chrome.windows.onFocusChanged.addListener(() => {
+browserApi.windows.onFocusChanged.addListener(() => {
   void updateCurrentTabSnapshot();
 });
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+browserApi.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   void (async () => {
     try {
       switch (message?.type) {
@@ -65,6 +74,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           });
           await refreshConsent();
           await fetchTodaySummary();
+          await checkForUpdate();
           sendResponse({ ok: true });
           break;
         case "tracker:set-options":
@@ -96,6 +106,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         case "tracker:refresh":
           await refreshConsent();
           await fetchTodaySummary();
+          await checkForUpdate();
           sendResponse(await getExtensionState());
           break;
         default:
@@ -114,14 +125,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 async function initializeState() {
   const state = await loadState();
   await saveState({ ...DEFAULT_STATE, ...state });
-  await chrome.alarms.clear(HEARTBEAT_ALARM);
-  await chrome.alarms.create(HEARTBEAT_ALARM, {
+  await browserApi.alarms.clear(HEARTBEAT_ALARM);
+  await browserApi.alarms.create(HEARTBEAT_ALARM, {
     delayInMinutes: HEARTBEAT_INTERVAL_MINUTES,
     periodInMinutes: HEARTBEAT_INTERVAL_MINUTES,
   });
   await updateCurrentTabSnapshot();
   await refreshConsent();
   await ensureActiveSession();
+  await checkForUpdate();
 }
 
 async function getExtensionState() {
@@ -129,6 +141,7 @@ async function getExtensionState() {
   return {
     ...state,
     dashboardUrl: resolveDashboardUrl(state),
+    installedVersion: getExtensionVersion(),
   };
 }
 
@@ -174,15 +187,17 @@ async function handleHeartbeatTick() {
 
 async function sendHeartbeat(payload) {
   const state = await loadState();
-  if (!navigator.onLine) {
-    await queueEntry(payload);
-    return;
-  }
 
   let sessionId = state.sessionId;
   if (!sessionId) {
     sessionId = await ensureActiveSession();
     payload.session_id = sessionId;
+  }
+  // Without a session we cannot attribute the beat; queue it for a later flush
+  // (which re-stamps it with a valid session) instead of sending an empty id.
+  if (!sessionId) {
+    await queueEntry(payload);
+    return;
   }
 
   try {
@@ -211,6 +226,7 @@ async function sendHeartbeat(payload) {
       await updateState({ consented: false, trackerState: "stopped", lastError: "Consent required" });
       return;
     }
+    // Network error / offline / transient failure: keep the beat for later.
     await queueEntry(payload);
     await updateState({ lastError: message });
   }
@@ -218,16 +234,31 @@ async function sendHeartbeat(payload) {
 
 async function flushQueue() {
   const state = await loadState();
-  if (!navigator.onLine || !state.queuedEntries.length) {
+  const pending = state.queuedEntries;
+  if (!pending.length) {
     return;
   }
+
+  // Re-attach the current session so entries queued under an old/empty session
+  // (e.g. one closed while offline) still land instead of being skipped server-side.
+  const sessionId = await ensureActiveSession();
+  if (!sessionId) {
+    return;
+  }
+  const entries = pending.map((entry) => ({ ...entry, session_id: sessionId }));
 
   try {
     await authorizedRequest("/tracker/entries/batch", {
       method: "POST",
-      body: JSON.stringify({ entries: state.queuedEntries }),
+      body: JSON.stringify({ entries }),
     });
-    await updateState({ queuedEntries: [] });
+    // Drop only the entries we actually sent (the oldest `sentCount`) inside the
+    // lock, so beats queued while this batch was in flight are not lost.
+    const sentCount = entries.length;
+    await withStateLock(async () => {
+      const current = await loadState();
+      await saveState({ ...current, queuedEntries: current.queuedEntries.slice(sentCount) });
+    });
   } catch (error) {
     await updateState({
       lastError: error instanceof Error ? error.message : "Failed to sync queued entries",
@@ -385,63 +416,31 @@ async function fetchTodaySummary() {
   }
 }
 
-async function authorizedRequest(path, init) {
+// checkForUpdate asks the backend for the latest published extension version and
+// flags the UI when the installed build is behind, so the user knows to
+// re-download/reinstall.
+async function checkForUpdate() {
   const state = await loadState();
   if (!state.apiBaseUrl || !state.token) {
-    throw new Error("Extension belum terhubung. Hubungkan dari dashboard KANTOR atau gunakan setup manual.");
+    return;
   }
-
-  const response = await fetch(`${sanitizeApiBaseUrl(state.apiBaseUrl)}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${state.token}`,
-      ...(init?.headers || {}),
-    },
-    credentials: "include",
-  });
-
-  const payload = await response.json().catch(() => null);
-  if (response.status === 401) {
-    const refreshed = await refreshAccessToken(state.apiBaseUrl);
-    if (refreshed) {
-      return authorizedRequest(path, init);
+  try {
+    const response = await authorizedRequest("/tracker/extension/status", { method: "GET" });
+    const latest = String(response?.data?.latest_version || "").trim();
+    if (!latest) {
+      return;
     }
+    await updateState({
+      latestVersion: latest,
+      updateAvailable: isVersionOlder(getExtensionVersion(), latest),
+    });
+  } catch {
+    // Non-fatal: version check never blocks tracking.
   }
-
-  if (!response.ok || !payload?.success) {
-    const code = payload?.error?.code || `HTTP_${response.status}`;
-    const message = payload?.error?.message || "Request failed";
-    throw new Error(`${code}: ${message}`);
-  }
-
-  return payload;
-}
-
-async function refreshAccessToken(apiBaseUrl) {
-  const response = await fetch(`${sanitizeApiBaseUrl(apiBaseUrl)}/auth/refresh`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({}),
-    credentials: "include",
-  });
-
-  const payload = await response.json().catch(() => null);
-  if (!response.ok || !payload?.success || !payload?.data?.tokens?.access_token) {
-    return false;
-  }
-
-  await updateState({
-    token: payload.data.tokens.access_token,
-  });
-
-  return true;
 }
 
 async function getCurrentTabInfo(excludedDomains) {
-  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  const [tab] = await browserApi.tabs.query({ active: true, lastFocusedWindow: true });
   if (!tab?.url || !tab.active) {
     return null;
   }
@@ -470,17 +469,23 @@ async function updateCurrentTabSnapshot() {
 }
 
 async function queueEntry(entry) {
-  const state = await loadState();
-  const nextQueue = [...state.queuedEntries, entry].slice(-250);
-  await updateState({ queuedEntries: nextQueue });
+  await withStateLock(async () => {
+    const state = await loadState();
+    const nextQueue = [...state.queuedEntries, entry];
+    if (nextQueue.length > MAX_QUEUED_ENTRIES) {
+      console.warn("KANTOR tracker: offline queue full, dropping oldest entries");
+      nextQueue.splice(0, nextQueue.length - MAX_QUEUED_ENTRIES);
+    }
+    await saveState({ ...state, queuedEntries: nextQueue });
+  });
 }
 
 async function queryIdleState(idleTimeoutSeconds) {
-  return chrome.idle.queryState(normalizeIdleTimeout(idleTimeoutSeconds));
+  return browserApi.idle.queryState(normalizeIdleTimeout(idleTimeoutSeconds));
 }
 
 function isTrackableUrl(rawUrl) {
-  return !/^chrome:|^chrome-extension:|^about:|^edge:|^file:/i.test(rawUrl);
+  return !/^chrome:|^chrome-extension:|^moz-extension:|^about:|^edge:|^file:/i.test(rawUrl);
 }
 
 function sanitizeApiBaseUrl(value) {
@@ -501,10 +506,12 @@ function normalizeExcludedDomains(items) {
   );
 }
 
+// Default idle threshold is 2 hours: a user is only counted idle after 2h with
+// no keyboard/mouse input. Configurable per user in the options page (min 60s).
 function normalizeIdleTimeout(value) {
-  const parsed = Number(value || 300);
+  const parsed = Number(value || 7200);
   if (!Number.isFinite(parsed) || parsed < 60) {
-    return 300;
+    return 7200;
   }
   return Math.round(parsed);
 }
@@ -523,10 +530,29 @@ function getTimezoneName() {
 
 function getExtensionVersion() {
   try {
-    return chrome.runtime.getManifest()?.version || "";
+    return browserApi.runtime.getManifest()?.version || "";
   } catch {
     return "";
   }
+}
+
+// isVersionOlder compares dotted numeric versions (e.g. "1.9" < "1.10").
+function isVersionOlder(current, latest) {
+  const toParts = (value) => String(value || "").split(".").map((part) => Number.parseInt(part, 10) || 0);
+  const a = toParts(current);
+  const b = toParts(latest);
+  const length = Math.max(a.length, b.length);
+  for (let i = 0; i < length; i += 1) {
+    const left = a[i] || 0;
+    const right = b[i] || 0;
+    if (left < right) {
+      return true;
+    }
+    if (left > right) {
+      return false;
+    }
+  }
+  return false;
 }
 
 function formatLocalDate(value = new Date()) {
@@ -555,29 +581,68 @@ function resolveDashboardUrl(state) {
   return toDashboardUrl(state.apiBaseUrl);
 }
 
+async function authorizedRequest(path, init) {
+  const state = await loadState();
+  if (!state.apiBaseUrl || !state.token) {
+    throw new Error("Extension belum terhubung. Hubungkan dari dashboard KANTOR atau gunakan setup manual.");
+  }
+
+  const response = await fetch(`${sanitizeApiBaseUrl(state.apiBaseUrl)}${path}`, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${state.token}`,
+      ...(init?.headers || {}),
+    },
+  });
+
+  const payload = await response.json().catch(() => null);
+
+  if (response.status === 401) {
+    // The extension authenticates with a long-lived Personal Access Token; a 401
+    // means it was revoked or is invalid. There is nothing to refresh — prompt the
+    // user to reconnect from the dashboard.
+    await updateState({
+      lastError: "Sesi tracker berakhir. Hubungkan ulang dari dashboard KANTOR.",
+    });
+    throw new Error("UNAUTHORIZED: reconnect required");
+  }
+
+  if (!response.ok || !payload?.success) {
+    const code = payload?.error?.code || `HTTP_${response.status}`;
+    const message = payload?.error?.message || "Request failed";
+    throw new Error(`${code}: ${message}`);
+  }
+
+  return payload;
+}
+
 async function loadState() {
-  const [persistentState, sessionState] = await Promise.all([
-    chrome.storage.local.get(DEFAULT_STATE),
-    chrome.storage.session.get({ token: "" }),
-  ]);
-  return {
-    ...DEFAULT_STATE,
-    ...persistentState,
-    token: String(sessionState.token || ""),
-  };
+  const state = await browserApi.storage.local.get(DEFAULT_STATE);
+  return { ...DEFAULT_STATE, ...state };
 }
 
 async function saveState(nextState) {
-  const { token, ...persistentState } = nextState;
-  await Promise.all([
-    chrome.storage.local.set(persistentState),
-    chrome.storage.local.remove("token"),
-    chrome.storage.session.set({ token: String(token || "") }),
-  ]);
+  await browserApi.storage.local.set(nextState);
+}
+
+// All state mutations run through a single promise chain so concurrent
+// read-modify-write calls (heartbeat tick, message handlers) cannot clobber each
+// other (e.g. lose queued entries or the pause flag).
+let stateLock = Promise.resolve();
+
+function withStateLock(fn) {
+  const run = stateLock.then(fn, fn);
+  stateLock = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
 }
 
 async function updateState(partial) {
-  const current = await loadState();
-  await saveState({ ...current, ...partial });
+  await withStateLock(async () => {
+    const current = await loadState();
+    await saveState({ ...current, ...partial });
+  });
 }
-

@@ -41,7 +41,18 @@ export const trackerKeys = {
   consents: () => ["operational", "tracker", "consents"] as const,
   domains: () => ["operational", "tracker", "domains"] as const,
   observedDomains: () => ["operational", "tracker", "observed-domains"] as const,
+  extensionStatus: () => ["operational", "tracker", "extension-status"] as const,
 };
+
+export type ExtensionStatus = {
+  latest_version: string;
+  reported_version: string;
+  needs_update: boolean;
+};
+
+export async function getTrackerExtensionStatus() {
+  return authGetJSON<ExtensionStatus>("/tracker/extension/status");
+}
 
 export async function getTrackerConsent() {
   return authGetJSON<ActivityConsent>("/tracker/consent");
