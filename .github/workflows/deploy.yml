@@ -119,6 +119,7 @@ jobs:
             --override-input saas-boilerplate path:/tmp/nix-config \
             --override-input segmenter path:/tmp/nix-config \
             --override-input segmenter-s52ai path:/tmp/nix-config \
+            --override-input wa-bot path:/tmp/nix-config \
             --print-out-paths --no-link)
           echo "path=$SYSTEM" >> "$GITHUB_OUTPUT"
 
