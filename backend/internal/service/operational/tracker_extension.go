@@ -101,7 +101,11 @@ func parseVersionParts(version string) []int {
 	return parts
 }
 
-func (s *TrackerService) BuildExtensionArchive(ctx context.Context) ([]byte, string, error) {
+// BuildExtensionArchive zips the bundled extension. The base manifest targets
+// Chromium (background.service_worker); for browser=="firefox" the manifest is
+// rewritten to a background.scripts event page, since Firefox does not support
+// service workers and Chrome rejects background.scripts in MV3.
+func (s *TrackerService) BuildExtensionArchive(ctx context.Context, browser string) ([]byte, string, error) {
 	extensionDir, err := resolveExtensionDir()
 	if err != nil {
 		slog.ErrorContext(ctx, "failed to resolve extension directory", "error", err)
@@ -131,6 +135,22 @@ func (s *TrackerService) BuildExtensionArchive(ctx context.Context) ([]byte, str
 			return fmt.Errorf("create zip entry %s: %w", zipPath, err)
 		}
 
+		// Rewrite the manifest for Firefox instead of copying it verbatim.
+		if zipPath == "manifest.json" && strings.EqualFold(browser, "firefox") {
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				return fmt.Errorf("read manifest for firefox: %w", err)
+			}
+			transformed, err := firefoxManifest(raw)
+			if err != nil {
+				return fmt.Errorf("rewrite manifest for firefox: %w", err)
+			}
+			if _, err := writer.Write(transformed); err != nil {
+				return fmt.Errorf("write firefox manifest: %w", err)
+			}
+			return nil
+		}
+
 		file, err := os.Open(path)
 		if err != nil {
 			return fmt.Errorf("open extension file %s: %w", path, err)
@@ -152,7 +172,22 @@ func (s *TrackerService) BuildExtensionArchive(ctx context.Context) ([]byte, str
 		return nil, "", fmt.Errorf("finalize tracker extension archive: %w", err)
 	}
 
-	return buffer.Bytes(), "kantor-activity-tracker.zip", nil
+	filename := "kantor-activity-tracker.zip"
+	if strings.EqualFold(browser, "firefox") {
+		filename = "kantor-activity-tracker-firefox.zip"
+	}
+	return buffer.Bytes(), filename, nil
+}
+
+// firefoxManifest rewrites the Chromium manifest's background key to a Firefox
+// event page (background.scripts), leaving everything else untouched.
+func firefoxManifest(raw []byte) ([]byte, error) {
+	var manifest map[string]any
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return nil, err
+	}
+	manifest["background"] = map[string]any{"scripts": []string{"background.js"}}
+	return json.MarshalIndent(manifest, "", "  ")
 }
 
 func resolveExtensionDir() (string, error) {

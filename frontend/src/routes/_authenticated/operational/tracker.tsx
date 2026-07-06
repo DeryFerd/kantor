@@ -439,10 +439,10 @@ function OperationalTrackerPage() {
     }
   }
 
-  async function handleExtensionDownload() {
+  async function handleExtensionDownload(browser: "chrome" | "firefox" = "chrome") {
     setIsDownloadingExtension(true);
     try {
-      const result = await downloadTrackerExtension();
+      const result = await downloadTrackerExtension(browser);
       const url = window.URL.createObjectURL(result.blob);
       const anchor = document.createElement("a");
       anchor.href = url;
@@ -451,7 +451,12 @@ function OperationalTrackerPage() {
       anchor.click();
       anchor.remove();
       window.URL.revokeObjectURL(url);
-      toast.success("Extension berhasil diunduh", "Extract file ZIP lalu pasang extension lewat chrome://extensions.");
+      toast.success(
+        "Extension berhasil diunduh",
+        browser === "firefox"
+          ? "Extract ZIP, lalu pasang lewat about:debugging → Load Temporary Add-on (pilih manifest.json)."
+          : "Extract file ZIP lalu pasang extension lewat chrome://extensions.",
+      );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Gagal mengunduh extension tracker");
     } finally {
@@ -697,9 +702,13 @@ function OperationalTrackerPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="outline" onClick={() => void handleExtensionDownload()} disabled={isDownloadingExtension}>
+          <Button type="button" variant="outline" onClick={() => void handleExtensionDownload("chrome")} disabled={isDownloadingExtension}>
             <Download className="h-4 w-4" />
-            {isDownloadingExtension ? "Mengunduh..." : "Download Extension"}
+            {isDownloadingExtension ? "Mengunduh..." : "Download (Chrome)"}
+          </Button>
+          <Button type="button" variant="outline" onClick={() => void handleExtensionDownload("firefox")} disabled={isDownloadingExtension}>
+            <Download className="h-4 w-4" />
+            Download (Firefox)
           </Button>
           <Button
             type="button"
