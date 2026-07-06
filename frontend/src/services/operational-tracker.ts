@@ -100,8 +100,9 @@ export async function listObservedTrackerDomains() {
   return authGetJSON<TrackerObservedDomain[]>("/tracker/domains/observed");
 }
 
-export async function downloadTrackerExtension() {
-  return authDownload("/tracker/extension/download", {
+export async function downloadTrackerExtension(browser?: "chrome" | "firefox") {
+  const query = browser === "firefox" ? "?browser=firefox" : "";
+  return authDownload(`/tracker/extension/download${query}`, {
     method: "GET",
   });
 }

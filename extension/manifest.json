@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "KANTOR Activity Tracker",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Track work activity for KANTOR platform",
   "permissions": ["tabs", "idle", "storage", "alarms"],
   "host_permissions": ["http://*/*", "https://*/*"],
@@ -13,8 +13,7 @@
     }
   ],
   "background": {
-    "service_worker": "background.js",
-    "scripts": ["background.js"]
+    "service_worker": "background.js"
   },
   "browser_specific_settings": {
     "gecko": {
