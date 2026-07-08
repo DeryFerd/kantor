@@ -478,8 +478,8 @@ func (a *App) buildRouter(
 					module.With(platformmiddleware.RequirePermission("operational:project:view")).Get("/overview", operationalOverviewHandler.Get)
 
 					module.Route("/projects", projectsHandler.RegisterRoutes)
-					module.Route("/projects/{projectID}/columns", kanbanHandler.RegisterColumnRoutes)
-					module.Route("/projects/{projectID}/tasks", kanbanHandler.RegisterTaskRoutes)
+					module.With(projectsHandler.RequireProjectAccess).Route("/projects/{projectID}/columns", kanbanHandler.RegisterColumnRoutes)
+					module.With(projectsHandler.RequireProjectAccess).Route("/projects/{projectID}/tasks", kanbanHandler.RegisterTaskRoutes)
 					module.Route("/vps", vpsHandler.RegisterRoutes)
 					module.Route("/domains", domainHandler.RegisterRoutes)
 				})

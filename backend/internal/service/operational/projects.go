@@ -105,7 +105,7 @@ func (s *ProjectsService) CreateProject(ctx context.Context, request operational
 	return s.GetProject(ctx, project.ID)
 }
 
-func (s *ProjectsService) ListProjects(ctx context.Context, query operational.ListProjectsQuery) ([]model.Project, int64, int, int, error) {
+func (s *ProjectsService) ListProjects(ctx context.Context, query operational.ListProjectsQuery, requesterID string, restrictToRequester bool) ([]model.Project, int64, int, int, error) {
 	page := query.Page
 	if page <= 0 {
 		page = 1
@@ -117,11 +117,13 @@ func (s *ProjectsService) ListProjects(ctx context.Context, query operational.Li
 	}
 
 	projects, total, err := s.repo.ListProjects(ctx, operationalrepo.ListProjectsParams{
-		Page:     page,
-		PerPage:  perPage,
-		Search:   strings.TrimSpace(query.Search),
-		Status:   query.Status,
-		Priority: query.Priority,
+		Page:                page,
+		PerPage:             perPage,
+		Search:              strings.TrimSpace(query.Search),
+		Status:              query.Status,
+		Priority:            query.Priority,
+		RestrictToRequester: restrictToRequester,
+		RequesterID:         requesterID,
 	})
 	if err != nil {
 		return nil, 0, 0, 0, err

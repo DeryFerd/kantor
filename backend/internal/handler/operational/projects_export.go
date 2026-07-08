@@ -23,7 +23,13 @@ func (h *ProjectsHandler) exportList(w http.ResponseWriter, r *http.Request) {
 	query.Page = 1
 	query.PerPage = 10000
 
-	items, _, _, _, err := h.service.ListProjects(r.Context(), query)
+	principal, ok := platformmiddleware.PrincipalFromContext(r.Context())
+	if !ok {
+		response.WriteError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Authenticated principal is missing", nil)
+		return
+	}
+
+	items, _, _, _, err := h.service.ListProjects(r.Context(), query, principal.UserID, !principal.IsSuperAdmin)
 	if err != nil {
 		h.writeError(r.Context(), w, err)
 		return
