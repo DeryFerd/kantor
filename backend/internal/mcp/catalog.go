@@ -28,13 +28,20 @@ var excludedSuffixes = []string{
 	"/auth/change-password",
 	"/notifications/stream",
 	"/health",
+	// Binary / full-dataset endpoints are useless (and huge) as text for an AI
+	// client, and export endpoints force per_page=10000 — a fast way to blow up
+	// the context window. Keep them off the tool surface.
+	"/export",
+	"/extension/download",
 }
 
 // excludedContains drops credential and OAuth self-management endpoints: an AI
-// client must not mint or revoke its own tokens or approve OAuth grants.
+// client must not mint or revoke its own tokens or approve OAuth grants. It also
+// drops file-serving routes, which return binary blobs.
 var excludedContains = []string{
 	"/auth/pat",
 	"/oauth",
+	"/files/",
 }
 
 // BuildCatalog derives the MCP tool surface from the live chi route table, so it

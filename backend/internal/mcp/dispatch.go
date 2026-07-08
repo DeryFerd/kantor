@@ -79,6 +79,10 @@ func (t ToolSpec) buildRequest(ctx context.Context, baseURL string, args map[str
 		}
 	}
 
+	if t.Meta != nil && t.Meta.Paginated {
+		clampPerPage(query, t.Meta.PerPageMax)
+	}
+
 	target := baseURL + path
 	if encoded := query.Encode(); encoded != "" {
 		target += "?" + encoded
@@ -114,6 +118,30 @@ func (t ToolSpec) buildRequest(ctx context.Context, baseURL string, args map[str
 // as float64, so integers must render without scientific notation/decimals, and
 // arrays become repeated keys (?k=a&k=b). fmt.Sprintf("%v") mangled all of these
 // (e.g. a large per_page -> "1e+06", an array -> "[a b]"), corrupting filters.
+// mcpPerPageCap is the hard upper bound MCP allows for per_page, so an AI client
+// cannot pull an entire table in one call (some endpoints have no server-side cap).
+const mcpPerPageCap = 100
+
+// clampPerPage limits an AI-supplied per_page, using the endpoint's own max when
+// known, else the global MCP cap.
+func clampPerPage(query url.Values, endpointMax int) {
+	limit := mcpPerPageCap
+	if endpointMax > 0 && endpointMax < limit {
+		limit = endpointMax
+	}
+	raw := query.Get("per_page")
+	if raw == "" {
+		return
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return
+	}
+	if n > limit {
+		query.Set("per_page", strconv.Itoa(limit))
+	}
+}
+
 func addQueryValue(query url.Values, key string, value interface{}) {
 	switch v := value.(type) {
 	case nil:
