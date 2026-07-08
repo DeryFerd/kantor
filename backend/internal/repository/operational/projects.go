@@ -26,6 +26,10 @@ type ListProjectsParams struct {
 	Search   string
 	Status   string
 	Priority string
+	// RestrictToRequester limits the result to projects the requester is a member
+	// of or created. Left false for super admins (who see every project).
+	RestrictToRequester bool
+	RequesterID         string
 }
 
 type CreateProjectParams struct {
@@ -129,6 +133,15 @@ func (r *ProjectsRepository) ListProjects(ctx context.Context, params ListProjec
 		index++
 	}
 
+	if params.RestrictToRequester {
+		filters = append(filters, fmt.Sprintf(
+			"(EXISTS (SELECT 1 FROM project_members pm WHERE pm.project_id = projects.id AND pm.user_id = $%d::uuid) OR projects.created_by = $%d::uuid)",
+			index, index,
+		))
+		args = append(args, params.RequesterID)
+		index++
+	}
+
 	whereClause := strings.Join(filters, " AND ")
 
 	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM projects WHERE %s`, whereClause)
@@ -192,6 +205,23 @@ func (r *ProjectsRepository) ListProjects(ctx context.Context, params ListProjec
 	}
 
 	return projects, total, nil
+}
+
+// IsProjectMemberOrCreator reports whether the user is a member of, or the
+// creator of, the given project. Used to gate per-project access for non-super
+// admins so they can only reach projects assigned to or owned by them.
+func (r *ProjectsRepository) IsProjectMemberOrCreator(ctx context.Context, projectID string, userID string) (bool, error) {
+	ctx, cancel := repository.QueryContext(ctx)
+	defer cancel()
+
+	var allowed bool
+	if err := repository.DB(ctx, r.db).QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM project_members WHERE project_id = $1::uuid AND user_id = $2::uuid)
+		    OR EXISTS (SELECT 1 FROM projects WHERE id = $1::uuid AND created_by = $2::uuid)
+	`, projectID, userID).Scan(&allowed); err != nil {
+		return false, err
+	}
+	return allowed, nil
 }
 
 func (r *ProjectsRepository) GetProjectByID(ctx context.Context, projectID string) (model.Project, error) {

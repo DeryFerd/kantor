@@ -48,11 +48,41 @@ func (h *ProjectsHandler) RegisterRoutes(router chi.Router) {
 	router.With(platformmiddleware.RequirePermission("operational:project:view")).Get("/", h.listProjects)
 	router.With(platformmiddleware.RequirePermission("operational:project:view")).Get("/export", h.exportList)
 	router.With(platformmiddleware.RequirePermission("operational:project:view")).Get("/available-users", h.listAvailableUsers)
-	router.With(platformmiddleware.RequirePermission("operational:project:view")).Get("/{projectID}", h.getProject)
-	router.With(platformmiddleware.RequirePermission("operational:project:view")).Get("/{projectID}/export", h.exportDetail)
-	router.With(platformmiddleware.RequirePermission("operational:project:edit")).Put("/{projectID}", h.updateProject)
-	router.With(platformmiddleware.RequirePermission("operational:project:delete")).Delete("/{projectID}", h.deleteProject)
-	router.With(platformmiddleware.RequirePermission("operational:project:manage_members")).Post("/{projectID}/members", h.mutateMembers)
+	router.With(platformmiddleware.RequirePermission("operational:project:view"), h.RequireProjectAccess).Get("/{projectID}", h.getProject)
+	router.With(platformmiddleware.RequirePermission("operational:project:view"), h.RequireProjectAccess).Get("/{projectID}/export", h.exportDetail)
+	router.With(platformmiddleware.RequirePermission("operational:project:edit"), h.RequireProjectAccess).Put("/{projectID}", h.updateProject)
+	router.With(platformmiddleware.RequirePermission("operational:project:delete"), h.RequireProjectAccess).Delete("/{projectID}", h.deleteProject)
+	router.With(platformmiddleware.RequirePermission("operational:project:manage_members"), h.RequireProjectAccess).Post("/{projectID}/members", h.mutateMembers)
+}
+
+// RequireProjectAccess blocks a non-super-admin from reaching a project they are
+// neither a member of nor the creator of. Super admins pass through.
+func (h *ProjectsHandler) RequireProjectAccess(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := platformmiddleware.PrincipalFromContext(r.Context())
+		if !ok {
+			response.WriteError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Authenticated principal is missing", nil)
+			return
+		}
+		if principal.IsSuperAdmin {
+			next.ServeHTTP(w, r)
+			return
+		}
+		projectID, ok := validateProjectIDParam(w, chi.URLParam(r, "projectID"))
+		if !ok {
+			return
+		}
+		allowed, err := h.repo.IsProjectMemberOrCreator(r.Context(), projectID, principal.UserID)
+		if err != nil {
+			response.WriteInternalError(r.Context(), w, err, "Failed to verify project access")
+			return
+		}
+		if !allowed {
+			response.WriteError(w, http.StatusForbidden, "FORBIDDEN", "You do not have access to this project", nil)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (h *ProjectsHandler) createProject(w http.ResponseWriter, r *http.Request) {
@@ -83,7 +113,13 @@ func (h *ProjectsHandler) listProjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	projects, total, page, perPage, err := h.service.ListProjects(r.Context(), query)
+	principal, ok := platformmiddleware.PrincipalFromContext(r.Context())
+	if !ok {
+		response.WriteError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Authenticated principal is missing", nil)
+		return
+	}
+
+	projects, total, page, perPage, err := h.service.ListProjects(r.Context(), query, principal.UserID, !principal.IsSuperAdmin)
 	if err != nil {
 		h.writeError(r.Context(), w, err)
 		return
