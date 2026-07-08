@@ -110,8 +110,21 @@ func (s *Server) callTool(ctx context.Context, req request, authHeader string, h
 
 	return newResult(req.ID, map[string]interface{}{
 		"content": []map[string]interface{}{
-			{"type": "text", "text": string(body)},
+			{"type": "text", "text": boundToolText(body)},
 		},
 		"isError": status >= 400,
 	})
+}
+
+// maxToolResponseBytes caps a single tool result so one over-broad query cannot
+// blow up the AI client's context window (which surfaces as upstream 529
+// "Overloaded" errors). Clients should paginate / filter instead.
+const maxToolResponseBytes = 100 * 1024
+
+func boundToolText(body []byte) string {
+	if len(body) <= maxToolResponseBytes {
+		return string(body)
+	}
+	return string(body[:maxToolResponseBytes]) +
+		"\n\n[response truncated at 100KB — narrow it with query filters or a smaller per_page, then page through the rest]"
 }
