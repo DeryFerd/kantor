@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { z } from "zod";
 
+import { TokenManagerCard } from "@/components/personal-access-tokens/token-manager-card";
 import { FormModal } from "@/components/shared/form-modal";
 import { ProtectedAvatar } from "@/components/shared/protected-avatar";
 import { Button } from "@/components/ui/button";
@@ -435,6 +436,8 @@ function ProfilePage() {
           </Button>
         </div>
       </div>
+
+      <TokenManagerCard />
 
       <FormModal
         error={changePasswordMutation.error instanceof ApiError ? changePasswordMutation.error.message : null}
