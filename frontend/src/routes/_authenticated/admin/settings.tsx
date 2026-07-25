@@ -25,7 +25,6 @@ import {
 } from "@/services/admin-rbac";
 import { toast } from "@/stores/toast-store";
 import { PolicySettingsCard } from "@/components/compensation-policy/policy-settings-card";
-import { TokenManagerCard } from "@/components/personal-access-tokens/token-manager-card";
 
 export const Route = createFileRoute("/_authenticated/admin/settings")({
   beforeLoad: async () => {
@@ -1068,7 +1067,6 @@ function AdminSettingsPage() {
         {hasPermission(permissions.hrisCompensationPolicyView) ? (
           <PolicySettingsCard />
         ) : null}
-        <TokenManagerCard />
       </div>
     </div>
   );
