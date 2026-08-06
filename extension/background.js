@@ -27,8 +27,14 @@ const HEARTBEAT_INTERVAL_MINUTES = 0.5;
 // with headroom, so a long offline stretch does not silently drop early activity.
 const MAX_QUEUED_ENTRIES = 5000;
 
-browserApi.runtime.onInstalled.addListener(() => {
+browserApi.runtime.onInstalled.addListener((details) => {
   void initializeState();
+  // On update, the KANTOR dashboard tab still runs the OLD content script (dead
+  // runtime). Reload those tabs so a fresh content script loads and the user
+  // does not have to refresh manually or hit "context invalidated".
+  if (details?.reason === "update") {
+    void reloadDashboardTabs();
+  }
 });
 
 browserApi.runtime.onStartup.addListener(() => {
@@ -579,6 +585,35 @@ function resolveDashboardUrl(state) {
     return explicit;
   }
   return toDashboardUrl(state.apiBaseUrl);
+}
+
+// reloadDashboardTabs refreshes the tabs on the configured dashboard origin so
+// that, after an extension update, the orphaned content script is replaced by a
+// fresh one instead of throwing "Extension context invalidated".
+async function reloadDashboardTabs() {
+  const state = await loadState();
+  const origin = dashboardOrigin(resolveDashboardUrl(state)) || dashboardOrigin(state.apiBaseUrl);
+  if (!origin) {
+    return;
+  }
+  try {
+    const tabs = await browserApi.tabs.query({ url: `${origin}/*` });
+    for (const tab of tabs) {
+      if (tab.id != null) {
+        await browserApi.tabs.reload(tab.id);
+      }
+    }
+  } catch {
+    // Best-effort: missing permission or a closed tab must never break startup.
+  }
+}
+
+function dashboardOrigin(value) {
+  try {
+    return new URL(String(value || "").trim()).origin;
+  } catch {
+    return "";
+  }
 }
 
 async function authorizedRequest(path, init) {

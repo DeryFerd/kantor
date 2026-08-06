@@ -118,12 +118,13 @@ async function issueExtensionToken(): Promise<string> {
 }
 
 // A content script from a previous extension build keeps running in the page
-// after the extension updates/reloads; calling it then throws "Extension context
-// invalidated". Reframe that into an actionable message instead of a raw error.
+// after the extension updates/reloads; its runtime handle is then dead, so calls
+// throw either "Extension context invalidated" or "Cannot read properties of
+// undefined (reading 'sendMessage')". Reframe both into an actionable message.
 function describeExtensionError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error ?? "");
-  if (/context invalidated/i.test(message)) {
-    return "Extension baru diperbarui. Muat ulang (refresh) halaman ini, lalu klik Sinkronkan Browser lagi.";
+  if (/context invalidated/i.test(message) || /sendMessage/i.test(message)) {
+    return "Extension perlu dipasang ulang: hapus extension lama, download & pasang versi terbaru (Download Chrome/Firefox), refresh halaman ini, lalu klik Sinkronkan Browser.";
   }
   return message || "Gagal menghubungkan extension tracker";
 }
@@ -344,6 +345,16 @@ function OperationalTrackerPage() {
       if (data.type === "KANTOR_TRACKER_RESULT" && data.requestId) {
         const pending = pendingRequests.get(data.requestId);
         if (!pending) {
+          return;
+        }
+
+        // A stale/orphaned content script (dead runtime after an extension
+        // update) posts an error like "context invalidated" or "reading
+        // 'sendMessage'". Ignore it and keep the request pending so a fresh
+        // content-script instance can still resolve it; the timeout is the
+        // fallback if none does. This is what makes duplicated content scripts
+        // (old + new in the same page) not surface a spurious error.
+        if (!data.success && /context invalidated|sendMessage/i.test(data.error || "")) {
           return;
         }
 
