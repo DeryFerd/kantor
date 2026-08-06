@@ -92,7 +92,29 @@
   }
 
   async function sendRuntimeMessage(type, payload) {
-    return browserApi.runtime.sendMessage({ type, payload });
+    // After the extension updates/reloads/is removed, this content script keeps
+    // running but its runtime handle is dead — calling it throws "Extension
+    // context invalidated". Detect it and surface an actionable message.
+    if (!isExtensionContextValid()) {
+      throw new Error("Extension baru diperbarui. Muat ulang (refresh) halaman ini, lalu klik Sinkronkan Browser lagi.");
+    }
+    try {
+      return await browserApi.runtime.sendMessage({ type, payload });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/context invalidated/i.test(message)) {
+        throw new Error("Extension baru diperbarui. Muat ulang (refresh) halaman ini, lalu klik Sinkronkan Browser lagi.");
+      }
+      throw error;
+    }
+  }
+
+  function isExtensionContextValid() {
+    try {
+      return Boolean(browserApi?.runtime?.id);
+    } catch {
+      return false;
+    }
   }
 
   function postResult(requestId, success, payload, error) {
