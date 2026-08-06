@@ -116,6 +116,17 @@ async function issueExtensionToken(): Promise<string> {
   });
   return created.token;
 }
+
+// A content script from a previous extension build keeps running in the page
+// after the extension updates/reloads; calling it then throws "Extension context
+// invalidated". Reframe that into an actionable message instead of a raw error.
+function describeExtensionError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  if (/context invalidated/i.test(message)) {
+    return "Extension baru diperbarui. Muat ulang (refresh) halaman ini, lalu klik Sinkronkan Browser lagi.";
+  }
+  return message || "Gagal menghubungkan extension tracker";
+}
 const TRACKER_EXTENSION_SOURCE = "KANTOR_TRACKER_EXTENSION";
 const DOMAIN_CATEGORY_OPTIONS = [
   { value: "development", label: "Development" },
@@ -433,7 +444,7 @@ function OperationalTrackerPage() {
         toast.success("Extension tersambung", "Browser ini sudah terhubung ke KANTOR Tracker.");
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Gagal menghubungkan extension tracker");
+      toast.error(describeExtensionError(error));
     } finally {
       setIsConnectingExtension(false);
     }
