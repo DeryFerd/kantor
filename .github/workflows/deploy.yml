@@ -61,7 +61,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup SSH aliases for private flake inputs
+      - name: Setup SSH keys for private flake inputs
         env:
           GH_FLAKE_A: ${{ secrets.GH_FLAKE_A }}
           GH_FLAKE_B: ${{ secrets.GH_FLAKE_B }}
@@ -71,9 +71,17 @@ jobs:
           echo "$GH_FLAKE_B" > ~/.ssh/flake-b
           chmod 600 ~/.ssh/flake-a ~/.ssh/flake-b
           GH_SCAN=$(ssh-keyscan github.com 2>/dev/null)
+          echo "$GH_SCAN" >> ~/.ssh/known_hosts
           echo "$GH_SCAN" | sed 's/^github.com/github.com-flake-a/' >> ~/.ssh/known_hosts
           echo "$GH_SCAN" | sed 's/^github.com/github.com-flake-b/' >> ~/.ssh/known_hosts
           cat >> ~/.ssh/config <<EOF
+          # nix-config now addresses its private inputs by the real host
+          # (nix-config 760d50b); lp-covertplay is the only one this job
+          # actually fetches over ssh, so its deploy key serves github.com.
+          Host github.com
+            User git
+            IdentityFile ~/.ssh/flake-b
+            IdentitiesOnly yes
           Host github.com-flake-a
             HostName github.com
             User git
@@ -109,10 +117,10 @@ jobs:
       - name: Build NixOS system
         id: build
         run: |
-          # lp-covertplay only depends on the kantor input. Override the other
-          # tenants' private flake inputs (used by porto/doc-project machines)
-          # to the already-cloned nix-config so this job never fetches repos it
-          # has no CI credentials for.
+          # The lp-covertplay machine needs the kantor and lp-covertplay
+          # inputs. Override the other tenants' private flake inputs (used by
+          # porto/doc-project machines) to the already-cloned nix-config so
+          # this job never fetches repos it has no CI credentials for.
           SYSTEM=$(nix build \
             /tmp/nix-config#nixosConfigurations.lp-covertplay.config.system.build.toplevel \
             --override-input kantor . \
